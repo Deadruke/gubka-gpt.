@@ -1,4 +1,3 @@
-
 import os
 import asyncio
 import base64
@@ -431,10 +430,9 @@ def extract_model_files(answer):
                     "ИИ добавил лишний текст между файлами"
                 )
         else:
-            tail = answer[end_position + len(END_MARKER):]
-
-            if tail.strip():
-                raise ValueError("ИИ добавил лишний текст после файлов")
+            # Дополнительный текст после закрытого последнего файла
+            # игнорируется, так как содержимое файла уже завершено.
+            pass
 
         content = content.rstrip("\r\n") + "\n"
 
