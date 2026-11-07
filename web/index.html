@@ -1,537 +1,358 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#101010">
-  <title>Gubka-GPT</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #101010;
-      --panel: #171717;
-      --panel2: #202020;
-      --border: #303030;
-      --text: #f2f2f2;
-      --muted: #929292;
-      --accent: #d7ff45;
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      height: 100dvh;
-      overflow: hidden;
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-
-    button, textarea { font: inherit; }
-
-    .app {
-      display: flex;
-      width: 100%;
-      height: 100%;
-    }
-
-    .sidebar {
-      width: 270px;
-      flex-shrink: 0;
-      display: flex;
-      flex-direction: column;
-      padding: 18px 14px;
-      background: #151515;
-      border-right: 1px solid var(--border);
-      transition: transform .25s ease;
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 11px;
-      padding: 5px 8px 24px;
-      font-size: 19px;
-      font-weight: 750;
-      letter-spacing: -.5px;
-    }
-
-    .brand-icon {
-      width: 34px;
-      height: 34px;
-      display: grid;
-      place-items: center;
-      border-radius: 11px;
-      background: var(--accent);
-      color: #111;
-      font-weight: 900;
-    }
-
-    .new-chat {
-      width: 100%;
-      padding: 13px;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      background: var(--panel2);
-      color: white;
-      text-align: left;
-      cursor: pointer;
-      transition: .2s;
-    }
-
-    .new-chat:hover { background: #292929; }
-
-    .history-title {
-      margin: 28px 8px 10px;
-      color: var(--muted);
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-    }
-
-    .history {
-      flex: 1;
-      overflow-y: auto;
-    }
-
-    .history-item {
-      display: block;
-      width: 100%;
-      padding: 11px 10px;
-      margin-bottom: 4px;
-      overflow: hidden;
-      border: 0;
-      border-radius: 9px;
-      background: transparent;
-      color: #c9c9c9;
-      text-align: left;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      cursor: pointer;
-    }
-
-    .history-item:hover,
-    .history-item.active {
-      background: #252525;
-      color: white;
-    }
-
-    .profile {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 15px 5px 3px;
-      border-top: 1px solid var(--border);
-    }
-
-    .avatar {
-      width: 35px;
-      height: 35px;
-      display: grid;
-      place-items: center;
-      border-radius: 50%;
-      background: #303030;
-      font-weight: 700;
-    }
-
-    .profile-name { font-size: 13px; }
-    .profile-status { margin-top: 3px; color: var(--muted); font-size: 11px; }
-
-    .main {
-      min-width: 0;
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      position: relative;
-    }
-
-    .topbar {
-      height: 62px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 24px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .top-title { font-weight: 650; }
-
-    .model {
-      padding: 7px 11px;
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      color: #c7c7c7;
-      font-size: 12px;
-    }
-
-    .menu-button {
-      display: none;
-      border: 0;
-      background: transparent;
-      color: white;
-      font-size: 23px;
-      cursor: pointer;
-    }
-
-    .messages {
-      flex: 1;
-      width: 100%;
-      max-width: 900px;
-      margin: 0 auto;
-      padding: 28px 25px 20px;
-      overflow-y: auto;
-      scroll-behavior: smooth;
-    }
-
-    .welcome {
-      min-height: 65%;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-    }
-
-    .welcome-logo {
-      width: 65px;
-      height: 65px;
-      display: grid;
-      place-items: center;
-      margin-bottom: 22px;
-      border-radius: 22px;
-      background: var(--accent);
-      color: #111;
-      font-size: 29px;
-      font-weight: 900;
-    }
-
-    .welcome h1 {
-      margin: 0;
-      font-size: clamp(25px, 5vw, 36px);
-      letter-spacing: -1.2px;
-    }
-
-    .welcome p {
-      max-width: 380px;
-      margin: 13px 0 0;
-      color: var(--muted);
-      line-height: 1.6;
-      font-size: 14px;
-    }
-
-    .message {
-      display: flex;
-      gap: 13px;
-      margin: 0 0 27px;
-      line-height: 1.7;
-      overflow-wrap: anywhere;
-    }
-
-    .message-avatar {
-      width: 31px;
-      height: 31px;
-      flex-shrink: 0;
-      display: grid;
-      place-items: center;
-      border-radius: 10px;
-      background: #292929;
-      font-size: 13px;
-      font-weight: 750;
-    }
-
-    .message.user .message-avatar {
-      background: var(--accent);
-      color: #111;
-    }
-
-    .message-content { min-width: 0; flex: 1; }
-    .message-role { margin-bottom: 5px; font-size: 12px; color: var(--muted); }
-    .message-text { white-space: pre-wrap; }
-
-    .message-text pre {
-      max-width: 100%;
-      overflow-x: auto;
-      padding: 15px;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      background: #090909;
-      font-size: 13px;
-    }
-
-    .composer-area {
-      width: 100%;
-      max-width: 900px;
-      margin: 0 auto;
-      padding: 10px 25px 20px;
-    }
-
-    .composer {
-      display: flex;
-      align-items: flex-end;
-      gap: 10px;
-      padding: 12px;
-      border: 1px solid #3a3a3a;
-      border-radius: 17px;
-      background: #1b1b1b;
-      box-shadow: 0 8px 35px #0005;
-    }
-
-    .composer textarea {
-      flex: 1;
-      min-height: 27px;
-      max-height: 160px;
-      resize: none;
-      border: 0;
-      outline: none;
-      background: transparent;
-      color: white;
-      line-height: 1.5;
-      font-size: 15px;
-    }
-
-    .composer textarea::placeholder { color: #777; }
-
-    .send {
-      width: 37px;
-      height: 37px;
-      flex-shrink: 0;
-      border: 0;
-      border-radius: 11px;
-      background: var(--accent);
-      color: #111;
-      font-size: 19px;
-      font-weight: 800;
-      cursor: pointer;
-    }
-
-    .send:disabled { opacity: .4; cursor: default; }
-
-    .disclaimer {
-      margin-top: 10px;
-      color: #777;
-      text-align: center;
-      font-size: 11px;
-    }
-
-    .typing { color: var(--muted); font-size: 13px; }
-
-    .overlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      z-index: 5;
-      background: #0008;
-    }
-
-    @media (max-width: 700px) {
-      .sidebar {
-        position: fixed;
-        z-index: 10;
-        top: 0;
-        bottom: 0;
-        left: 0;
-        transform: translateX(-100%);
-      }
-
-      .sidebar.open { transform: translateX(0); }
-      .overlay.show { display: block; }
-      .menu-button { display: block; }
-      .topbar { padding: 0 15px; }
-      .messages { padding: 22px 15px; }
-      .composer-area { padding: 8px 12px 14px; }
-      .model { font-size: 11px; }
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101010">
+<title>Gubka-GPT</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root {
+  color-scheme:dark;
+  --bg:#101010;--panel:#181818;--panel2:#222;
+  --border:#303030;--text:#f2f2f2;--muted:#929292;
+  --accent:#d7ff45;
+}
+*{box-sizing:border-box}
+body{margin:0;height:100dvh;overflow:hidden;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,textarea,input{font:inherit}
+button{cursor:pointer}
+.app{display:flex;height:100%;width:100%}
+.sidebar{width:270px;flex-shrink:0;display:flex;flex-direction:column;padding:17px 13px;background:#151515;border-right:1px solid var(--border)}
+.brand{display:flex;align-items:center;gap:11px;padding:5px 8px 23px;font-size:19px;font-weight:750}
+.logo{width:35px;height:35px;display:grid;place-items:center;border-radius:11px;background:var(--accent);color:#111;font-weight:900}
+.side-btn{width:100%;padding:12px;border:1px solid var(--border);border-radius:11px;background:var(--panel2);color:white;text-align:left;margin-bottom:8px}
+.side-btn.active{border-color:var(--accent);color:var(--accent)}
+.section{margin:20px 8px 9px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.history{flex:1;overflow:auto}
+.history-item{width:100%;padding:11px 10px;margin-bottom:4px;border:0;border-radius:9px;background:transparent;color:#ccc;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.history-item.active,.history-item:hover{background:#292929;color:white}
+.profile{padding:14px 6px 4px;border-top:1px solid var(--border);font-size:13px}
+.profile small{display:block;margin-top:4px;color:var(--muted)}
+.main{min-width:0;flex:1;display:flex;flex-direction:column;position:relative}
+.topbar{height:62px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 23px;border-bottom:1px solid var(--border)}
+.top-title{font-weight:650}
+.model{padding:7px 11px;border:1px solid var(--border);border-radius:20px;color:#ccc;font-size:12px}
+.menu{display:none;border:0;background:none;color:white;font-size:23px}
+.view{display:none;flex:1;min-height:0;flex-direction:column}
+.view.active{display:flex}
+.messages{flex:1;overflow-y:auto;width:100%;max-width:900px;margin:auto;padding:28px 25px}
+.welcome{min-height:65%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.welcome-logo{width:65px;height:65px;display:grid;place-items:center;margin-bottom:22px;border-radius:21px;background:var(--accent);color:#111;font-size:29px;font-weight:900}
+.welcome h1{margin:0;font-size:clamp(25px,5vw,36px);letter-spacing:-1px}
+.welcome p{max-width:380px;color:var(--muted);font-size:14px;line-height:1.6}
+.message{display:flex;gap:13px;margin-bottom:27px;line-height:1.7;overflow-wrap:anywhere}
+.avatar{width:32px;height:32px;flex-shrink:0;display:grid;place-items:center;border-radius:10px;background:#292929;font-size:12px;font-weight:750}
+.message.user .avatar{background:var(--accent);color:#111}
+.message-content{min-width:0;flex:1}
+.role{margin-bottom:5px;color:var(--muted);font-size:12px}
+.message-text{white-space:pre-wrap}
+.message-text pre{max-width:100%;overflow:auto;padding:14px;border:1px solid var(--border);border-radius:11px;background:#090909}
+.composer-area{width:100%;max-width:900px;margin:auto;padding:10px 25px 19px}
+.composer{display:flex;align-items:flex-end;gap:10px;padding:12px;border:1px solid #393939;border-radius:17px;background:#1b1b1b}
+.composer textarea{flex:1;min-height:27px;max-height:160px;resize:none;border:0;outline:0;background:transparent;color:white;line-height:1.5;font-size:15px}
+.send{width:38px;height:38px;flex-shrink:0;border:0;border-radius:11px;background:var(--accent);color:#111;font-size:20px;font-weight:800}
+.send:disabled{opacity:.4}
+.note{margin-top:9px;color:#777;text-align:center;font-size:11px}
+.typing{color:var(--muted);font-size:13px;padding:8px 0}
+.terminal-wrap{width:100%;max-width:950px;margin:0 auto;padding:22px;overflow:auto;flex:1}
+.terminal-title{font-size:22px;font-weight:700;margin-bottom:8px}
+.terminal-desc{color:var(--muted);font-size:13px;line-height:1.6;margin-bottom:20px}
+.terminal-box{border:1px solid #333;border-radius:14px;background:#080b08;overflow:hidden}
+.terminal-head{padding:11px 14px;background:#171717;border-bottom:1px solid #333;color:#aaa;font-size:12px}
+.terminal-output{min-height:180px;max-height:45vh;overflow:auto;padding:15px;color:#b9e68a;font-family:ui-monospace,monospace;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
+.terminal-input{display:flex;gap:8px;padding:10px;border-top:1px solid #333}
+.terminal-input input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:#b9e68a;font-family:monospace}
+.terminal-input button,.action-btn{border:0;border-radius:9px;padding:10px 13px;background:var(--accent);color:#111;font-weight:700}
+.terminal-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:15px}
+.action-btn{background:#252525;color:white;border:1px solid #393939}
+.settings-wrap{max-width:650px;width:100%;margin:0 auto;padding:25px;overflow:auto}
+.setting{padding:16px 0;border-bottom:1px solid var(--border)}
+.setting label{display:block;margin-bottom:9px;font-weight:600}
+.setting p{color:var(--muted);font-size:12px}
+.setting select,.setting input{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;background:#222;color:white}
+.overlay{display:none;position:fixed;inset:0;z-index:5;background:#0009}
+@media(max-width:700px){
+ .sidebar{position:fixed;z-index:10;top:0;bottom:0;left:0;transform:translateX(-100%);transition:transform .2s}
+ .sidebar.open{transform:translateX(0)}
+ .overlay.show{display:block}
+ .menu{display:block}
+ .topbar{padding:0 14px}
+ .messages{padding:20px 15px}
+ .composer-area{padding:8px 12px 14px}
+ .terminal-wrap{padding:16px}
+}
+</style>
 </head>
-
 <body>
 <div class="app">
-  <div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
+<div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
+<aside class="sidebar" id="sidebar">
+  <div class="brand"><div class="logo">G</div>Gubka-GPT</div>
+  <button class="side-btn active" id="chatTab" onclick="switchView('chat')">＋ Новый чат</button>
+  <button class="side-btn" id="terminalTab" onclick="switchView('terminal')">⌘ TERMINAL</button>
+  <button class="side-btn" id="settingsTab" onclick="switchView('settings')">⚙ Настройки</button>
+  <div class="section">История чатов</div>
+  <div class="history" id="history"></div>
+  <div class="profile"><b>Gubka-GPT</b><small>AI Assistant</small></div>
+</aside>
 
-  <aside class="sidebar" id="sidebar">
-    <div class="brand">
-      <div class="brand-icon">G</div>
-      Gubka-GPT
+<main class="main">
+<header class="topbar">
+  <div style="display:flex;align-items:center;gap:12px">
+    <button class="menu" onclick="toggleSidebar()">☰</button>
+    <div class="top-title" id="topTitle">Новый чат</div>
+  </div>
+  <div class="model">Gubka AI</div>
+</header>
+
+<section class="view active" id="chatView">
+  <div class="messages" id="messages">
+    <div class="welcome" id="welcome">
+      <div class="welcome-logo">G</div>
+      <h1>Чем могу помочь?</h1>
+      <p>Программирование, разработка проектов, GitHub и ответы на любые вопросы.</p>
     </div>
+  </div>
+  <div class="composer-area">
+    <div class="composer">
+      <textarea id="prompt" rows="1" placeholder="Напишите сообщение Gubka-GPT..."></textarea>
+      <button class="send" id="send" onclick="sendMessage()">↑</button>
+    </div>
+    <div class="note">Gubka-GPT может допускать ошибки. Проверяйте важную информацию.</div>
+  </div>
+</section>
 
-    <button class="new-chat" onclick="newChat()">＋ Новый чат</button>
-
-    <div class="history-title">История</div>
-    <div class="history" id="history"></div>
-
-    <div class="profile">
-      <div class="avatar">G</div>
-      <div>
-        <div class="profile-name">Gubka-GPT</div>
-        <div class="profile-status">AI Assistant</div>
+<section class="view" id="terminalView">
+  <div class="terminal-wrap">
+    <div class="terminal-title">TERMINAL</div>
+    <div class="terminal-desc">Рабочая панель проекта GitHub. Здесь можно просматривать файлы и готовить изменения. Команды ограничены безопасными операциями — произвольный запуск команд на сервере отключён.</div>
+    <div class="terminal-box">
+      <div class="terminal-head">GUBKA TERMINAL · PROJECT CONSOLE</div>
+      <div class="terminal-output" id="terminalOutput">Gubka-GPT Terminal
+Подключение к GitHub будет доступно после авторизации.
+Напиши help, чтобы увидеть команды.</div>
+      <div class="terminal-input">
+        <input id="terminalInput" autocomplete="off" placeholder="Введите команду...">
+        <button onclick="runTerminal()">Ввод</button>
       </div>
     </div>
-  </aside>
-
-  <main class="main">
-    <header class="topbar">
-      <div style="display:flex;align-items:center;gap:12px">
-        <button class="menu-button" onclick="toggleSidebar()">☰</button>
-        <div class="top-title">Новый чат</div>
-      </div>
-      <div class="model">Gubka AI</div>
-    </header>
-
-    <section class="messages" id="messages">
-      <div class="welcome" id="welcome">
-        <div class="welcome-logo">G</div>
-        <h1>Чем могу помочь?</h1>
-        <p>Программирование, разработка проектов, работа с GitHub и ответы на любые вопросы.</p>
-      </div>
-    </section>
-
-    <div class="composer-area">
-      <div class="composer">
-        <textarea id="prompt" rows="1" placeholder="Напишите сообщение Gubka-GPT..."></textarea>
-        <button class="send" id="send" onclick="sendMessage()">↑</button>
-      </div>
-      <div class="disclaimer">Gubka-GPT может допускать ошибки. Проверяйте важную информацию.</div>
+    <div class="terminal-actions">
+      <button class="action-btn" onclick="runCommand('help')">Команды</button>
+      <button class="action-btn" onclick="runCommand('repo')">Информация о проекте</button>
+      <button class="action-btn" onclick="runCommand('ls')">Список файлов</button>
+      <button class="action-btn" onclick="runCommand('pending')">Ожидающие изменения</button>
     </div>
-  </main>
+  </div>
+</section>
+
+<section class="view" id="settingsView">
+  <div class="settings-wrap">
+    <div class="terminal-title">Настройки</div>
+    <div class="setting">
+      <label>Внешний вид</label>
+      <select id="themeSetting" onchange="saveSettings()">
+        <option value="dark">Тёмная тема</option>
+        <option value="darker">Очень тёмная тема</option>
+      </select>
+    </div>
+    <div class="setting">
+      <label>Отправка сообщений</label>
+      <select id="enterSetting" onchange="saveSettings()">
+        <option value="enter">Enter — отправить</option>
+        <option value="ctrl">Ctrl + Enter — отправить</option>
+      </select>
+    </div>
+    <div class="setting">
+      <label>Анимация интерфейса</label>
+      <select id="motionSetting" onchange="saveSettings()">
+        <option value="on">Включена</option>
+        <option value="off">Отключена</option>
+      </select>
+    </div>
+    <div class="setting">
+      <p>Настройки сохраняются в этом браузере. Секретные ключи здесь не хранятся.</p>
+    </div>
+  </div>
+</section>
+</main>
 </div>
 
 <script>
-  const messages = document.getElementById("messages");
-  const promptInput = document.getElementById("prompt");
-  const sendButton = document.getElementById("send");
+const tg = window.Telegram?.WebApp;
+if(tg){tg.ready();tg.expand();}
 
-  let chatId = crypto.randomUUID();
-  let chats = [];
+const initData = tg?.initData || "";
+const messagesEl=document.getElementById("messages");
+const promptEl=document.getElementById("prompt");
+const sendBtn=document.getElementById("send");
+const output=document.getElementById("terminalOutput");
 
-  function toggleSidebar() {
-    document.getElementById("sidebar").classList.toggle("open");
-    document.getElementById("overlay").classList.toggle("show");
-  }
+let chats=[];
+let activeChat=null;
+let busy=false;
 
-  function newChat() {
-    chatId = crypto.randomUUID();
-    messages.innerHTML = `
-      <div class="welcome" id="welcome">
-        <div class="welcome-logo">G</div>
-        <h1>Чем могу помочь?</h1>
-        <p>Программирование, разработка проектов, работа с GitHub и ответы на любые вопросы.</p>
-      </div>`;
-    document.querySelector(".top-title").textContent = "Новый чат";
-    if (window.innerWidth <= 700) toggleSidebar();
-  }
-
-  function addMessage(role, text) {
-    const welcome = document.getElementById("welcome");
-    if (welcome) welcome.remove();
-
-    const item = document.createElement("div");
-    item.className = "message " + role;
-
-    const avatar = document.createElement("div");
-    avatar.className = "message-avatar";
-    avatar.textContent = role === "user" ? "Вы" : "G";
-
-    const content = document.createElement("div");
-    content.className = "message-content";
-
-    const label = document.createElement("div");
-    label.className = "message-role";
-    label.textContent = role === "user" ? "Вы" : "Gubka-GPT";
-
-    const body = document.createElement("div");
-    body.className = "message-text";
-    body.textContent = text;
-
-    content.append(label, body);
-    item.append(avatar, content);
-    messages.appendChild(item);
-    messages.scrollTop = messages.scrollHeight;
-  }
-
-  function renderHistory() {
-    const history = document.getElementById("history");
-    history.innerHTML = "";
-
-    chats.forEach(chat => {
-      const button = document.createElement("button");
-      button.className = "history-item";
-      button.textContent = chat.title;
-      button.onclick = () => {
-        chatId = chat.id;
-        if (window.innerWidth <= 700) toggleSidebar();
-      };
-      history.appendChild(button);
-    });
-  }
-
-  async function sendMessage() {
-    const text = promptInput.value.trim();
-    if (!text || sendButton.disabled) return;
-
-    addMessage("user", text);
-    promptInput.value = "";
-    promptInput.style.height = "auto";
-    sendButton.disabled = true;
-
-    const typing = document.createElement("div");
-    typing.className = "typing";
-    typing.textContent = "Gubka-GPT думает...";
-    messages.appendChild(typing);
-    messages.scrollTop = messages.scrollHeight;
-
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: text,
-          chat_id: chatId,
-          initData: window.Telegram?.WebApp?.initData || ""
-        })
-      });
-
-      const data = await response.json();
-      typing.remove();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Ошибка сервера: " + response.status);
-      }
-
-      addMessage("assistant", data.reply || data.answer || "Сервер не вернул ответ.");
-
-      if (!chats.some(chat => chat.id === chatId)) {
-        chats.unshift({
-          id: chatId,
-          title: text.slice(0, 35)
-        });
-        renderHistory();
-      }
-    } catch (error) {
-      typing.remove();
-      addMessage("assistant", "Не удалось получить ответ: " + error.message);
-    } finally {
-      sendButton.disabled = false;
-      promptInput.focus();
-    }
-  }
-
-  promptInput.addEventListener("input", () => {
-    promptInput.style.height = "auto";
-    promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + "px";
+function uuid(){return crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(16).slice(2)}
+function createChat(){
+  const c={id:uuid(),title:"Новый чат",messages:[]};
+  chats.unshift(c);activeChat=c.id;renderHistory();renderChat();
+  switchView("chat");
+}
+function current(){return chats.find(x=>x.id===activeChat)}
+function renderHistory(){
+  const el=document.getElementById("history");el.innerHTML="";
+  chats.forEach(c=>{
+    const b=document.createElement("button");
+    b.className="history-item"+(c.id===activeChat?" active":"");
+    b.textContent=c.title;
+    b.onclick=()=>{activeChat=c.id;renderHistory();renderChat();switchView("chat");closeMobile()};
+    el.appendChild(b);
   });
-
-  promptInput.addEventListener("keydown", event => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      sendMessage();
-    }
-  });
-
-  if (window.Telegram?.WebApp) {
-    window.Telegram.WebApp.ready();
-    window.Telegram.WebApp.expand();
+}
+function renderChat(){
+  const c=current();
+  document.getElementById("topTitle").textContent=c?.title||"Новый чат";
+  messagesEl.innerHTML="";
+  if(!c||!c.messages.length){
+    messagesEl.innerHTML='<div class="welcome" id="welcome"><div class="welcome-logo">G</div><h1>Чем могу помочь?</h1><p>Программирование, разработка проектов, GitHub и ответы на любые вопросы.</p></div>';
+    return;
   }
+  c.messages.forEach(m=>drawMessage(m.role,m.content));
+}
+function drawMessage(role,text){
+  const item=document.createElement("div");item.className="message "+role;
+  const avatar=document.createElement("div");avatar.className="avatar";avatar.textContent=role==="user"?"Вы":"G";
+  const content=document.createElement("div");content.className="message-content";
+  const label=document.createElement("div");label.className="role";label.textContent=role==="user"?"Вы":"Gubka-GPT";
+  const body=document.createElement("div");body.className="message-text";body.textContent=text;
+  content.append(label,body);item.append(avatar,content);messagesEl.append(item);
+  messagesEl.scrollTop=messagesEl.scrollHeight;
+}
+function switchView(name){
+  ["chat","terminal","settings"].forEach(v=>{
+    document.getElementById(v+"View").classList.toggle("active",v===name);
+    document.getElementById(v+"Tab").classList.toggle("active",v===name);
+  });
+  document.getElementById("topTitle").textContent={chat:current()?.title||"Новый чат",terminal:"TERMINAL",settings:"Настройки"}[name];
+  closeMobile();
+}
+function toggleSidebar(){
+  document.getElementById("sidebar").classList.toggle("open");
+  document.getElementById("overlay").classList.toggle("show");
+}
+function closeMobile(){
+  document.getElementById("sidebar").classList.remove("open");
+  document.getElementById("overlay").classList.remove("show");
+}
+async function api(path,body){
+  if(!initData)throw new Error("Открой Gubka-GPT через кнопку в Telegram.");
+  const opts={method:body?"POST":"GET",headers:{"X-Telegram-Init-Data":initData}};
+  if(body){opts.headers["Content-Type"]="application/json";opts.body=JSON.stringify(body);}
+  const r=await fetch(path,opts);
+  const raw=await r.text();let data={};
+  try{data=JSON.parse(raw)}catch{data={error:raw||"Неизвестная ошибка"}}
+  if(!r.ok)throw new Error(data.error||data.message||"Ошибка сервера: "+r.status);
+  return data;
+}
+async function sendMessage(){
+  const text=promptEl.value.trim();
+  if(!text||busy)return;
+  if(!activeChat)createChat();
+  const c=current();if(!c)return;
+  busy=true;sendBtn.disabled=true;
+  c.messages.push({role:"user",content:text});
+  if(c.title==="Новый чат")c.title=text.slice(0,36);
+  promptEl.value="";promptEl.style.height="auto";
+  renderHistory();renderChat();
+  const typing=document.createElement("div");typing.className="typing";typing.textContent="Gubka-GPT думает...";
+  messagesEl.append(typing);messagesEl.scrollTop=messagesEl.scrollHeight;
+  try{
+    const data=await api("/api/chat",{message:text,chat_id:c.id});
+    typing.remove();
+    const answer=data.answer||data.reply||"ИИ не вернул ответ.";
+    c.messages.push({role:"assistant",content:answer});
+    renderChat();
+  }catch(e){
+    typing.remove();
+    c.messages.push({role:"assistant",content:"Не удалось получить ответ: "+e.message});
+    renderChat();
+  }finally{busy=false;sendBtn.disabled=false;promptEl.focus();}
+}
+promptEl.addEventListener("input",()=>{
+  promptEl.style.height="auto";
+  promptEl.style.height=Math.min(promptEl.scrollHeight,160)+"px";
+});
+promptEl.addEventListener("keydown",e=>{
+  const mode=document.getElementById("enterSetting").value;
+  if(e.key==="Enter"&&!e.shiftKey&&((mode==="enter"&&!e.ctrlKey)||(mode==="ctrl"&&e.ctrlKey))){
+    e.preventDefault();sendMessage();
+  }
+});
+
+function terminalPrint(text){
+  output.textContent+="\n"+String(text);
+  output.scrollTop=output.scrollHeight;
+}
+async function runCommand(command){
+  const parts=command.trim().split(/\s+/);
+  const cmd=(parts.shift()||"").toLowerCase();
+  if(!cmd)return;
+  terminalPrint("> "+command);
+  try{
+    if(cmd==="help"){
+      terminalPrint("Доступные команды:\nhelp — список команд\nrepo — информация о GitHub\nls — список файлов\nread путь — прочитать файл\npending — ожидающие изменения\nclear — очистить окно");
+    }else if(cmd==="clear"){
+      output.textContent="Gubka-GPT Terminal";
+    }else if(cmd==="repo"){
+      const d=await api("/api/repo");
+      terminalPrint(JSON.stringify(d.info,null,2));
+    }else if(cmd==="ls"){
+      const d=await api("/api/repo");
+      terminalPrint((d.files||[]).join("\n")||"Файлы не найдены");
+    }else if(cmd==="read"){
+      const path=parts.join(" ");
+      if(!path)throw new Error("Использование: read main.py");
+      const d=await api("/api/read",{path});
+      terminalPrint("Файл: "+path+"\n\n"+d.content);
+    }else if(cmd==="pending"){
+      const d=await api("/api/pending");
+      terminalPrint(d.pending?JSON.stringify(d.pending,null,2):"Нет подготовленных изменений.");
+    }else{
+      terminalPrint("Неизвестная команда. Напиши help.");
+    }
+  }catch(e){terminalPrint("ОШИБКА: "+e.message);}
+}
+function runTerminal(){
+  const input=document.getElementById("terminalInput");
+  const command=input.value.trim();input.value="";
+  runCommand(command);
+}
+document.getElementById("terminalInput").addEventListener("keydown",e=>{
+  if(e.key==="Enter")runTerminal();
+});
+function saveSettings(){
+  const s={
+    theme:document.getElementById("themeSetting").value,
+    enter:document.getElementById("enterSetting").value,
+    motion:document.getElementById("motionSetting").value
+  };
+  localStorage.setItem("gubka-settings",JSON.stringify(s));
+  document.documentElement.style.setProperty("--bg",s.theme==="darker"?"#090909":"#101010");
+  document.documentElement.style.setProperty("--panel",s.theme==="darker"?"#111":"#181818");
+  document.documentElement.style.setProperty("--panel2",s.theme==="darker"?"#191919":"#222");
+  document.documentElement.style.scrollBehavior=s.motion==="off"?"auto":"smooth";
+}
+function loadSettings(){
+  try{
+    const s=JSON.parse(localStorage.getItem("gubka-settings")||"{}");
+    if(s.theme)document.getElementById("themeSetting").value=s.theme;
+    if(s.enter)document.getElementById("enterSetting").value=s.enter;
+    if(s.motion)document.getElementById("motionSetting").value=s.motion;
+    saveSettings();
+  }catch{}
+}
+loadSettings();
+createChat();
 </script>
 </body>
 </html>
