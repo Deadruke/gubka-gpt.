@@ -1,1244 +1,922 @@
+
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#080d18">
-  <title>Gubka-GPT</title>
-
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-
-  <style>
-    :root {
-      --bg: #080d18;
-      --panel: #0e1626;
-      --panel2: #121e32;
-      --border: #20304a;
-      --blue: #3988ff;
-      --blue2: #1765dc;
-      --text: #edf4ff;
-      --muted: #8b9bb4;
-      --danger: #ff5d70;
-      --green: #42d99a;
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background:
-        radial-gradient(ellipse at 50% -20%, #16376a 0%, transparent 48%),
-        var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-
-    button, input, textarea, select { font: inherit; }
-    button { cursor: pointer; }
-
-    .app {
-      width: 100%;
-      max-width: 1100px;
-      min-height: 100vh;
-      margin: auto;
-      display: flex;
-      flex-direction: column;
-      padding: 16px;
-      padding-bottom: calc(18px + env(safe-area-inset-bottom));
-    }
-
-    header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 8px 2px 18px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 11px;
-    }
-
-    .logo {
-      width: 42px;
-      height: 42px;
-      display: grid;
-      place-items: center;
-      border-radius: 14px;
-      background: linear-gradient(140deg, #4a9bff, #1756c7);
-      box-shadow: 0 5px 25px #1765dc55;
-      font-size: 23px;
-    }
-
-    .brand h1 {
-      margin: 0;
-      font-size: 19px;
-      letter-spacing: -.5px;
-    }
-
-    .brand small {
-      display: block;
-      color: var(--muted);
-      margin-top: 3px;
-      font-size: 11px;
-    }
-
-    .status {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--green);
-      box-shadow: 0 0 10px #42d99a77;
-    }
-
-    .layout {
-      display: grid;
-      grid-template-columns: 245px minmax(0, 1fr);
-      gap: 15px;
-      flex: 1;
-      padding-top: 16px;
-      min-height: 0;
-    }
-
-    aside {
-      background: #0c1422cc;
-      border: 1px solid var(--border);
-      border-radius: 17px;
-      padding: 13px;
-      height: fit-content;
-    }
-
-    .side-title {
-      color: var(--muted);
-      font-size: 10px;
-      text-transform: uppercase;
-      letter-spacing: 1.3px;
-      margin: 8px 8px 10px;
-    }
-
-    .nav-btn {
-      width: 100%;
-      border: 0;
-      background: transparent;
-      color: #b7c6dc;
-      text-align: left;
-      padding: 12px;
-      border-radius: 11px;
-      margin-bottom: 4px;
-      transition: .18s;
-      font-size: 13px;
-    }
-
-    .nav-btn:hover, .nav-btn.active {
-      background: #1b3152;
-      color: white;
-    }
-
-    .nav-btn.active {
-      box-shadow: inset 3px 0 var(--blue);
-    }
-
-    .account {
-      margin-top: 18px;
-      padding: 12px;
-      background: #111e31;
-      border: 1px solid var(--border);
-      border-radius: 13px;
-      overflow: hidden;
-    }
-
-    .account-name {
-      font-size: 13px;
-      font-weight: 600;
-      overflow-wrap: anywhere;
-    }
-
-    .account-provider {
-      font-size: 11px;
-      color: var(--muted);
-      margin-top: 5px;
-    }
-
-    .main {
-      min-width: 0;
-      display: flex;
-      flex-direction: column;
-    }
-
-    .panel {
-      display: none;
-      min-width: 0;
-      flex: 1;
-    }
-
-    .panel.active {
-      display: flex;
-      flex-direction: column;
-    }
-
-    .welcome {
-      padding: 20px 4px 15px;
-    }
-
-    .welcome h2 {
-      font-size: clamp(23px, 4vw, 31px);
-      margin: 0 0 8px;
-      letter-spacing: -.8px;
-    }
-
-    .welcome p {
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.6;
-      margin: 0;
-    }
-
-    .chat-box {
-      flex: 1;
-      min-height: 300px;
-      background: #0b1321cc;
-      border: 1px solid var(--border);
-      border-radius: 17px;
-      padding: 15px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }
-
-    .message {
-      max-width: 92%;
-      border: 1px solid var(--border);
-      background: #111d30;
-      border-radius: 14px;
-      padding: 12px 13px;
-      align-self: flex-start;
-      overflow-wrap: anywhere;
-      position: relative;
-      font-size: 13px;
-      line-height: 1.65;
-    }
-
-    .message.user {
-      align-self: flex-end;
-      background: #15366a;
-      border-color: #285ba0;
-    }
-
-    .message-label {
-      color: #8fbaff;
-      font-size: 10px;
-      font-weight: 700;
-      margin-bottom: 6px;
-    }
-
-    .message-content {
-      white-space: pre-wrap;
-    }
-
-    .message pre {
-      white-space: pre-wrap;
-      overflow-x: auto;
-      background: #070c15;
-      border: 1px solid #263752;
-      border-radius: 9px;
-      padding: 11px;
-      font-size: 12px;
-    }
-
-    .message code {
-      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-      color: #a8d0ff;
-    }
-
-    .copy-message {
-      display: block;
-      margin-top: 9px;
-      border: 1px solid #304663;
-      border-radius: 8px;
-      color: #bcd7ff;
-      background: #172943;
-      padding: 6px 10px;
-      font-size: 11px;
-    }
-
-    .composer {
-      display: flex;
-      gap: 9px;
-      margin-top: 12px;
-      padding: 9px;
-      background: #101a2a;
-      border: 1px solid var(--border);
-      border-radius: 15px;
-    }
-
-    .composer textarea {
-      flex: 1;
-      min-width: 0;
-      resize: none;
-      min-height: 43px;
-      max-height: 150px;
-      border: 0;
-      outline: 0;
-      background: transparent;
-      color: white;
-      padding: 11px 5px;
-      font-size: 13px;
-    }
-
-    .composer textarea::placeholder { color: #71829c; }
-
-    .send-btn, .primary {
-      border: 0;
-      color: white;
-      background: linear-gradient(135deg, #398cff, #1760d2);
-      border-radius: 11px;
-      padding: 0 17px;
-      font-weight: 600;
-      transition: .18s;
-    }
-
-    .send-btn:hover, .primary:hover { filter: brightness(1.12); }
-
-    button:disabled {
-      opacity: .45;
-      cursor: not-allowed;
-    }
-
-    .section-head {
-      padding: 10px 2px 17px;
-    }
-
-    .section-head h2 {
-      margin: 0 0 7px;
-      font-size: 22px;
-    }
-
-    .section-head p {
-      color: var(--muted);
-      margin: 0;
-      font-size: 12px;
-      line-height: 1.5;
-    }
-
-    .card {
-      background: #0e1828;
-      border: 1px solid var(--border);
-      border-radius: 15px;
-      padding: 16px;
-      margin-bottom: 12px;
-      min-width: 0;
-    }
-
-    .card h3 {
-      font-size: 14px;
-      margin: 0 0 12px;
-    }
-
-    .field {
-      width: 100%;
-      padding: 12px;
-      color: white;
-      background: #080f1c;
-      border: 1px solid #293c59;
-      border-radius: 10px;
-      outline: none;
-      font-size: 13px;
-      margin-bottom: 10px;
-    }
-
-    .field:focus { border-color: var(--blue); }
-
-    .action-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 9px;
-    }
-
-    .secondary {
-      background: #172943;
-      color: #c8dcfa;
-      border: 1px solid #2a4263;
-      border-radius: 10px;
-      padding: 10px 13px;
-      font-size: 12px;
-    }
-
-    .danger {
-      color: #ff9aa6;
-      border-color: #713541;
-      background: #351b27;
-    }
-
-    .repo-info, .result {
-      color: #b7c7df;
-      font-size: 12px;
-      line-height: 1.6;
-      overflow-wrap: anywhere;
-    }
-
-    .file-list {
-      display: flex;
-      flex-direction: column;
-      gap: 7px;
-      margin-top: 12px;
-    }
-
-    .file-item {
-      padding: 11px;
-      border-radius: 9px;
-      background: #101e32;
-      border: 1px solid #223653;
-      color: #c7dcf8;
-      font-size: 12px;
-      text-align: left;
-      overflow-wrap: anywhere;
-    }
-
-    .file-item:hover { border-color: var(--blue); }
-
-    .notice {
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.6;
-      margin-top: 10px;
-    }
-
-    .error { color: #ff8290; }
-    .success { color: #63dfa9; }
-
-    .login-screen {
-      position: fixed;
-      inset: 0;
-      z-index: 10;
-      background: #070c16ee;
-      backdrop-filter: blur(15px);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-    }
-
-    .login-screen.show { display: flex; }
-
-    .login-card {
-      width: 100%;
-      max-width: 390px;
-      background: #101a2b;
-      border: 1px solid #2a4162;
-      border-radius: 21px;
-      padding: 25px;
-      box-shadow: 0 20px 80px #0008;
-    }
-
-    .login-card h2 {
-      margin: 0 0 8px;
-      font-size: 23px;
-    }
-
-    .login-card p {
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.6;
-      margin: 0 0 20px;
-    }
-
-    .login-option {
-      width: 100%;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 14px;
-      margin-top: 10px;
-      border-radius: 12px;
-      background: #17263d;
-      border: 1px solid #304766;
-      color: white;
-      text-align: left;
-      font-weight: 600;
-    }
-
-    .login-option:hover { background: #203858; }
-
-    .login-icon {
-      width: 32px;
-      height: 32px;
-      border-radius: 9px;
-      display: grid;
-      place-items: center;
-      background: #263b59;
-      font-size: 18px;
-    }
-
-    .login-note {
-      margin-top: 17px;
-      color: #71839e;
-      font-size: 10px;
-      line-height: 1.5;
-    }
-
-    .loading {
-      color: #8ebaff;
-      font-size: 12px;
-      padding: 10px 0;
-    }
-
-    .mobile-menu { display: none; }
-
-    @media (max-width: 720px) {
-      .app { padding: 11px; }
-      .layout { grid-template-columns: 1fr; }
-      aside {
-        display: flex;
-        gap: 5px;
-        overflow-x: auto;
-        padding: 7px;
-        position: sticky;
-        top: 0;
-        z-index: 3;
-      }
-      .side-title, .account { display: none; }
-      .nav-btn {
-        width: auto;
-        white-space: nowrap;
-        margin: 0;
-        padding: 10px 12px;
-        font-size: 11px;
-      }
-      .nav-btn.active { box-shadow: inset 0 -2px var(--blue); }
-      .chat-box { min-height: 48vh; }
-      .welcome { padding-top: 12px; }
-      .message { max-width: 96%; }
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101010">
+<title>Gubka-GPT</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{
+  --bg:#101010;
+  --side:#171717;
+  --panel:#1c1c1c;
+  --panel2:#232323;
+  --border:#303030;
+  --text:#ececec;
+  --muted:#999;
+  --blue:#2878e8;
+  --blue-hover:#3989fa;
+  --danger:#e05a65;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body{overflow:hidden}
+button,input,textarea,select{font:inherit}
+button{cursor:pointer}
+button:disabled{opacity:.5;cursor:not-allowed}
+#app{height:100dvh;display:flex;overflow:hidden}
+.sidebar{
+  width:270px;flex-shrink:0;background:var(--side);
+  border-right:1px solid var(--border);
+  display:flex;flex-direction:column;padding:13px;
+  transition:transform .25s,width .25s;
+  z-index:20;
+}
+.sidebar-top{display:flex;align-items:center;gap:10px;margin-bottom:20px}
+.brand{display:flex;align-items:center;gap:10px;min-width:0;flex:1}
+.logo{
+  width:34px;height:34px;border-radius:11px;
+  background:#252525;border:1px solid #414141;
+  display:grid;place-items:center;font-weight:800;font-size:17px;
+}
+.brand-name{font-size:15px;font-weight:700;letter-spacing:-.3px}
+.icon-btn{
+  border:0;background:transparent;color:#aaa;border-radius:9px;
+  width:36px;height:36px;display:grid;place-items:center;font-size:19px;
+}
+.icon-btn:hover{background:#292929;color:white}
+.new-chat{
+  width:100%;padding:11px 12px;border:1px solid #383838;
+  border-radius:10px;background:#222;color:#eee;text-align:left;
+  font-size:13px;margin-bottom:19px;
+}
+.new-chat:hover{background:#2b2b2b}
+.side-label{
+  color:#777;font-size:10px;text-transform:uppercase;
+  letter-spacing:1px;margin:4px 8px 9px;
+}
+.chat-list{flex:1;overflow-y:auto;min-height:50px}
+.chat-item{
+  display:flex;align-items:center;gap:8px;padding:10px;
+  border-radius:9px;color:#c5c5c5;font-size:12px;
+  cursor:pointer;margin-bottom:3px;
+}
+.chat-item:hover,.chat-item.active{background:#292929;color:white}
+.chat-item .chat-title{
+  flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.chat-delete{border:0;background:none;color:#777;padding:3px;font-size:15px}
+.chat-delete:hover{color:#ff7777}
+.side-tools{border-top:1px solid var(--border);padding-top:12px;margin-top:12px}
+.side-link{
+  display:flex;align-items:center;gap:11px;width:100%;
+  padding:11px 10px;border:0;border-radius:9px;
+  background:transparent;color:#c8c8c8;text-align:left;font-size:13px;
+}
+.side-link:hover,.side-link.active{background:#292929;color:white}
+.account{
+  margin-top:12px;padding:10px;border-radius:11px;
+  display:flex;align-items:center;gap:10px;cursor:pointer;
+}
+.account:hover{background:#292929}
+.avatar{
+  width:34px;height:34px;border-radius:50%;background:#303030;
+  display:grid;place-items:center;overflow:hidden;flex-shrink:0;
+  font-weight:700;color:#ddd;
+}
+.avatar img{width:100%;height:100%;object-fit:cover}
+.account-text{min-width:0;flex:1}
+.account-name{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis}
+.account-sub{font-size:10px;color:#888;margin-top:4px}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
+.topbar{
+  height:58px;flex-shrink:0;display:flex;align-items:center;
+  gap:12px;padding:0 19px;border-bottom:1px solid #252525;
+}
+.top-title{font-size:14px;font-weight:600;flex:1}
+.top-status{font-size:11px;color:#858585;display:flex;align-items:center;gap:7px}
+.status-dot{width:7px;height:7px;border-radius:50%;background:#48bd83}
+.workspace{flex:1;min-height:0;display:none;flex-direction:column;overflow:hidden}
+.workspace.active{display:flex}
+.chat-scroll{
+  flex:1;overflow-y:auto;min-height:0;padding:28px 18px 20px;
+  scroll-behavior:smooth;
+}
+.chat-inner{max-width:790px;margin:0 auto;width:100%}
+.welcome{text-align:center;padding:11vh 10px 35px}
+.welcome-mark{
+  width:52px;height:52px;margin:0 auto 20px;border-radius:17px;
+  display:grid;place-items:center;background:#252525;
+  border:1px solid #3a3a3a;font-size:23px;font-weight:800;
+}
+.welcome h1{font-size:27px;letter-spacing:-.8px;margin:0 0 10px}
+.welcome p{color:#888;font-size:13px;line-height:1.6;margin:0}
+.message-row{display:flex;margin:0 0 24px;animation:appear .2s ease}
+@keyframes appear{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+.message-row.user{justify-content:flex-end}
+.message{
+  max-width:88%;min-width:0;padding:13px 15px;
+  border-radius:17px;background:#222;
+  font-size:14px;line-height:1.7;overflow-wrap:anywhere;
+}
+.message-row.user .message{
+  background:var(--blue);color:white;border-radius:17px 17px 5px 17px;
+}
+.message-row.assistant .message{background:transparent;padding-left:0}
+.message-label{font-size:10px;color:#888;margin-bottom:7px;font-weight:700;letter-spacing:.4px}
+.message-row.user .message-label{color:#d6e6ff}
+.message-content{white-space:pre-wrap}
+.message-content pre{
+  white-space:pre;overflow:auto;padding:13px;background:#111;
+  border:1px solid #353535;border-radius:10px;font-size:12px;
+}
+.message-content code{font-family:ui-monospace,monospace;color:#b6d4ff}
+.message-actions{display:flex;gap:6px;margin-top:8px}
+.copy-btn{
+  border:0;background:transparent;color:#858585;
+  padding:5px 7px;font-size:11px;border-radius:6px;
+}
+.copy-btn:hover{background:#292929;color:white}
+.composer-area{padding:12px 18px 17px;flex-shrink:0}
+.composer-wrap{max-width:790px;margin:auto}
+.composer{
+  display:flex;align-items:flex-end;gap:9px;
+  background:#222;border:1px solid #3b3b3b;
+  border-radius:17px;padding:9px 10px 9px 15px;
+  transition:border-color .2s;
+}
+.composer:focus-within{border-color:#555}
+#messageInput{
+  flex:1;min-width:0;resize:none;max-height:180px;min-height:37px;
+  background:transparent;border:0;outline:0;color:white;
+  padding:8px 0;font-size:14px;line-height:1.5;
+}
+#messageInput::placeholder{color:#777}
+.send-btn{
+  width:37px;height:37px;border:0;border-radius:11px;
+  background:var(--blue);color:white;font-size:18px;
+  display:grid;place-items:center;flex-shrink:0;
+}
+.send-btn:hover{background:var(--blue-hover)}
+.composer-note{text-align:center;color:#666;font-size:10px;margin-top:9px}
+.typing{color:#999;font-size:12px;padding:10px 0}
+.empty-note{color:#777;font-size:12px;padding:12px}
+.section-scroll{overflow-y:auto;padding:25px 22px;flex:1}
+.section-inner{max-width:850px;margin:auto}
+.section-heading{margin-bottom:22px}
+.section-heading h2{font-size:23px;margin:0 0 8px}
+.section-heading p{font-size:12px;color:#888;line-height:1.6;margin:0}
+.card{
+  background:#191919;border:1px solid #303030;
+  border-radius:14px;padding:17px;margin-bottom:13px;
+}
+.card h3{font-size:13px;margin:0 0 13px}
+.field{
+  width:100%;padding:11px 12px;margin-bottom:10px;
+  border:1px solid #383838;border-radius:9px;
+  background:#111;color:white;outline:0;font-size:13px;
+}
+.field:focus{border-color:#666}
+textarea.field{resize:vertical;line-height:1.5}
+.btn{
+  border:1px solid #3a3a3a;border-radius:9px;
+  background:#292929;color:#ddd;padding:10px 13px;font-size:12px;
+}
+.btn:hover{background:#333}
+.btn-blue{background:var(--blue);border-color:var(--blue);color:white}
+.btn-blue:hover{background:var(--blue-hover)}
+.btn-danger{color:#f18a92;border-color:#583238;background:#291b1d}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px}
+.result{font-size:12px;color:#aaa;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:10px}
+.result.error{color:#ff8585}
+.result.success{color:#70d8a4}
+.file-list{display:flex;flex-direction:column;gap:5px;margin-top:12px}
+.file-item{
+  width:100%;text-align:left;padding:10px 12px;
+  border:1px solid #303030;border-radius:8px;background:#202020;
+  color:#ccc;font-size:12px;overflow-wrap:anywhere;
+}
+.file-item:hover{border-color:#666;background:#282828}
+.file-view{
+  white-space:pre-wrap;overflow:auto;max-height:430px;
+  background:#101010;border:1px solid #303030;border-radius:9px;
+  padding:13px;color:#ccc;font:12px/1.6 ui-monospace,monospace;
+}
+.terminal{
+  flex:1;min-height:0;display:flex;flex-direction:column;
+  background:#0c0c0c;border:1px solid #303030;border-radius:12px;overflow:hidden;
+}
+.terminal-head{
+  height:39px;flex-shrink:0;display:flex;align-items:center;
+  justify-content:space-between;padding:0 12px;
+  background:#1b1b1b;border-bottom:1px solid #303030;
+  color:#aaa;font-size:11px;
+}
+.terminal-output{
+  flex:1;min-height:180px;overflow:auto;padding:14px;
+  font:12px/1.7 ui-monospace,SFMono-Regular,monospace;
+  color:#c8c8c8;white-space:pre-wrap;overflow-wrap:anywhere;
+}
+.term-line{margin-bottom:5px}
+.term-prompt{color:#7daeff}
+.term-error{color:#ff8585}
+.term-success{color:#7bd8a2}
+.terminal-input-row{
+  display:flex;gap:9px;align-items:center;padding:11px 13px;
+  border-top:1px solid #303030;background:#151515;
+}
+.terminal-prefix{color:#7daeff;font:12px monospace}
+#terminalInput{
+  flex:1;min-width:0;background:transparent;border:0;outline:0;
+  color:white;font:12px monospace;
+}
+.profile-top{display:flex;align-items:center;gap:15px}
+.profile-avatar{width:65px;height:65px;border-radius:50%;overflow:hidden;background:#303030;display:grid;place-items:center;font-size:22px}
+.profile-avatar img{width:100%;height:100%;object-fit:cover}
+.profile-name{font-size:17px;font-weight:700}
+.profile-sub{font-size:11px;color:#888;margin-top:5px}
+.stats-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.stat{padding:13px;background:#222;border:1px solid #333;border-radius:10px}
+.stat-value{font-size:19px;font-weight:700}
+.stat-label{font-size:10px;color:#888;margin-top:5px}
+.login-screen{
+  position:fixed;inset:0;background:#000b;backdrop-filter:blur(9px);
+  z-index:50;display:none;align-items:center;justify-content:center;padding:18px;
+}
+.login-screen.show{display:flex}
+.login-card{
+  width:100%;max-width:370px;background:#1b1b1b;
+  border:1px solid #383838;border-radius:18px;padding:23px;
+}
+.login-card h2{font-size:21px;margin:0 0 8px}
+.login-card p{font-size:12px;color:#999;line-height:1.6;margin:0 0 18px}
+.login-option{
+  width:100%;display:flex;align-items:center;gap:12px;
+  padding:13px;margin:9px 0;border:1px solid #3b3b3b;
+  background:#252525;color:white;border-radius:11px;text-align:left;
+}
+.login-option:hover{background:#303030}
+.login-icon{width:32px;height:32px;border-radius:9px;background:#383838;display:grid;place-items:center;font-size:16px}
+.login-note{font-size:10px;color:#777;line-height:1.5;margin-top:15px}
+.overlay{display:none;position:fixed;inset:0;background:#0008;z-index:15}
+@media(max-width:760px){
+  .sidebar{
+    position:fixed;top:0;bottom:0;left:0;
+    transform:translateX(-105%);width:min(290px,85vw);
+    box-shadow:15px 0 45px #0007;
+  }
+  .sidebar.open{transform:translateX(0)}
+  .overlay.show{display:block}
+  .topbar{padding:0 12px}
+  .chat-scroll{padding:18px 13px}
+  .composer-area{padding:9px 10px calc(10px + env(safe-area-inset-bottom))}
+  .message{max-width:94%;font-size:13px}
+  .welcome{padding-top:10vh}
+  .welcome h1{font-size:23px}
+  .section-scroll{padding:19px 13px}
+}
+@media(min-width:761px){
+  .sidebar.collapsed{width:0;padding:0;overflow:hidden;border:0}
+}
+</style>
 </head>
-
 <body>
-<div class="app">
-  <header>
-    <div class="brand">
-      <div class="logo">🧠</div>
-      <div>
-        <h1>Gubka-GPT</h1>
-        <small>AI assistant · Developer workspace</small>
+<div id="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-top">
+      <div class="brand">
+        <div class="logo">G</div>
+        <div class="brand-name">Gubka-GPT</div>
       </div>
+      <button class="icon-btn" id="collapseBtn" title="Свернуть меню">☰</button>
     </div>
-    <div class="status">
-      <span class="dot"></span>
-      <span id="connectionStatus">Подключение...</span>
+
+    <button class="new-chat" id="newChatBtn">＋ Новый чат</button>
+
+    <div class="side-label">История чатов</div>
+    <div class="chat-list" id="chatList"></div>
+
+    <div class="side-tools">
+      <button class="side-link" data-view="terminal">⌘ <span>Терминал</span></button>
+      <button class="side-link" data-view="github">⌂ <span>GitHub</span></button>
+      <button class="side-link" data-view="files">▤ <span>Файлы проекта</span></button>
+      <button class="side-link" data-view="changes">◇ <span>Изменения кода</span></button>
     </div>
-  </header>
 
-  <div class="layout">
-    <aside>
-      <div class="side-title">Рабочее пространство</div>
-      <button class="nav-btn active" data-panel="chat">✦ Чат с ИИ</button>
-      <button class="nav-btn" data-panel="github">⌘ GitHub</button>
-      <button class="nav-btn" data-panel="files">▤ Файлы</button>
-      <button class="nav-btn" data-panel="changes">◈ Изменения</button>
-      <button class="nav-btn" data-panel="profile">◎ Профиль</button>
-
-      <div class="account">
+    <div class="account" id="accountButton">
+      <div class="avatar" id="sideAvatar">G</div>
+      <div class="account-text">
         <div class="account-name" id="sideUser">Гость</div>
-        <div class="account-provider" id="sideProvider">Не авторизован</div>
+        <div class="account-sub" id="sideProvider">Нажми для входа</div>
       </div>
-    </aside>
+      <span style="color:#777">···</span>
+    </div>
+  </aside>
 
-    <main class="main">
-      <section class="panel active" id="panel-chat">
-        <div class="welcome">
-          <h2>Привет! Я Gubka-GPT.</h2>
-          <p>Помогаю программировать, анализировать код, находить ошибки и работать с GitHub.</p>
-        </div>
+  <div class="overlay" id="overlay"></div>
 
-        <div class="chat-box" id="chatBox">
-          <div class="message">
-            <div class="message-label">GUBKA-GPT</div>
-            <div class="message-content">Привет! Чем займёмся сегодня?</div>
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn" id="menuBtn">☰</button>
+      <div class="top-title" id="topTitle">Новый чат</div>
+      <div class="top-status"><span class="status-dot" id="statusDot"></span><span id="connectionStatus">Подключение</span></div>
+    </header>
+
+    <section class="workspace active" id="view-chat">
+      <div class="chat-scroll" id="chatScroll">
+        <div class="chat-inner" id="chatBox">
+          <div class="welcome" id="welcome">
+            <div class="welcome-mark">G</div>
+            <h1>Чем займёмся сегодня?</h1>
+            <p>Gubka-GPT поможет с кодом, GitHub, поиском ошибок и идеями.</p>
           </div>
         </div>
-
-        <div class="composer">
-          <textarea id="messageInput" placeholder="Напиши сообщение..." rows="1"></textarea>
-          <button class="send-btn" id="sendBtn">➤</button>
+      </div>
+      <div class="composer-area">
+        <div class="composer-wrap">
+          <div class="composer">
+            <textarea id="messageInput" rows="1" placeholder="Напиши сообщение Gubka-GPT..."></textarea>
+            <button class="send-btn" id="sendBtn" title="Отправить">↑</button>
+          </div>
+          <div class="composer-note">Enter — отправить · Shift + Enter — новая строка</div>
         </div>
-        <div class="notice">Enter — отправить · Shift + Enter — новая строка</div>
-      </section>
+      </div>
+    </section>
 
-      <section class="panel" id="panel-github">
-        <div class="section-head">
-          <h2>GitHub</h2>
-          <p>Подключай репозитории и работай с проектами прямо здесь.</p>
+    <section class="workspace" id="view-terminal">
+      <div class="section-scroll">
+        <div class="section-inner" style="height:100%;display:flex;flex-direction:column">
+          <div class="section-heading">
+            <h2>Терминал</h2>
+            <p>Консоль для просмотра выбранного GitHub-проекта и выполнения доступных операций.</p>
+          </div>
+          <div class="terminal">
+            <div class="terminal-head"><span>GUBKA TERMINAL</span><button class="btn" id="terminalClear">Очистить</button></div>
+            <div class="terminal-output" id="terminalOutput">
+              <div class="term-line term-success">Gubka Terminal готов.</div>
+              <div class="term-line">Напиши <b>help</b>, чтобы посмотреть команды.</div>
+            </div>
+            <div class="terminal-input-row">
+              <span class="terminal-prefix">gubka $</span>
+              <input id="terminalInput" autocomplete="off" spellcheck="false" placeholder="Введите команду...">
+            </div>
+          </div>
         </div>
+      </div>
+    </section>
 
+    <section class="workspace" id="view-github">
+      <div class="section-scroll"><div class="section-inner">
+        <div class="section-heading"><h2>GitHub</h2><p>Подключение и управление репозиториями.</p></div>
         <div class="card">
-          <h3>Выбранный репозиторий</h3>
-          <div class="repo-info" id="currentRepo">Загрузка...</div>
-          <div class="action-row">
-            <button class="secondary" id="loadReposBtn">Обновить список</button>
-          </div>
-          <select class="field" id="repoSelect" style="margin-top:12px">
-            <option value="">Выбери репозиторий</option>
-          </select>
-          <button class="primary" id="selectRepoBtn" style="padding:11px 15px">Выбрать репозиторий</button>
+          <h3>Текущий репозиторий</h3>
+          <div class="result" id="currentRepo">Загрузка...</div>
+          <div class="actions"><button class="btn" id="loadReposBtn">Обновить список</button></div>
+          <select class="field" id="repoSelect" style="margin-top:12px"><option value="">Выбери репозиторий</option></select>
+          <button class="btn btn-blue" id="selectRepoBtn">Выбрать репозиторий</button>
         </div>
-
         <div class="card">
           <h3>Создать репозиторий</h3>
           <input class="field" id="newRepoName" placeholder="Название репозитория">
-          <input class="field" id="newRepoDescription" placeholder="Описание (необязательно)">
-          <label class="notice">
-            <input type="checkbox" id="newRepoPrivate">
-            Сделать репозиторий приватным
-          </label>
-          <div class="action-row">
-            <button class="primary" id="createRepoBtn" style="padding:11px 15px">Создать</button>
-          </div>
+          <input class="field" id="newRepoDescription" placeholder="Описание (пока не поддерживается сервером)">
+          <label style="font-size:11px;color:#aaa"><input type="checkbox" id="newRepoPrivate" checked> Приватный репозиторий</label>
+          <div class="actions"><button class="btn btn-blue" id="createRepoBtn">Создать</button></div>
           <div class="result" id="createRepoResult"></div>
         </div>
-
         <div class="card">
           <h3>Информация о репозитории</h3>
-          <button class="secondary" id="repoInfoBtn">Получить информацию</button>
+          <button class="btn" id="repoInfoBtn">Получить информацию</button>
           <div class="result" id="repoInfoResult"></div>
         </div>
-      </section>
+      </div></div>
+    </section>
 
-      <section class="panel" id="panel-files">
-        <div class="section-head">
-          <h2>Файлы проекта</h2>
-          <p>Просматривай содержимое файлов выбранного репозитория.</p>
-        </div>
-
+    <section class="workspace" id="view-files">
+      <div class="section-scroll"><div class="section-inner">
+        <div class="section-heading"><h2>Файлы проекта</h2><p>Просмотр файлов выбранного репозитория.</p></div>
         <div class="card">
           <h3>Список файлов</h3>
-          <button class="secondary" id="loadFilesBtn">Загрузить файлы</button>
+          <button class="btn" id="loadFilesBtn">Загрузить файлы</button>
           <div class="file-list" id="fileList"></div>
         </div>
-
         <div class="card">
           <h3>Содержимое файла</h3>
           <div class="result" id="selectedFileName">Файл не выбран</div>
-          <pre id="fileContent" style="white-space:pre-wrap;overflow-wrap:anywhere;background:#080f1c;border:1px solid #263752;border-radius:10px;padding:12px;max-height:430px;overflow:auto;font-size:11px;color:#c6dcfa"></pre>
-          <button class="secondary" id="copyFileBtn">Скопировать содержимое</button>
+          <pre class="file-view" id="fileContent"></pre>
+          <button class="btn" id="copyFileBtn">Скопировать содержимое</button>
         </div>
-      </section>
+      </div></div>
+    </section>
 
-      <section class="panel" id="panel-changes">
-        <div class="section-head">
-          <h2>Изменения кода</h2>
-          <p>Опиши задачу. ИИ подготовит изменения, которые можно проверить перед отправкой в GitHub.</p>
-        </div>
-
+    <section class="workspace" id="view-changes">
+      <div class="section-scroll"><div class="section-inner">
+        <div class="section-heading"><h2>Изменения кода</h2><p>ИИ подготовит полные файлы. Проверь результат перед отправкой в GitHub.</p></div>
         <div class="card">
-          <h3>Что нужно изменить?</h3>
-          <textarea class="field" id="changePrompt" rows="5" placeholder="Например: добавь авторизацию через GitHub..."></textarea>
-          <button class="primary" id="prepareBtn" style="padding:12px 16px">Подготовить изменения</button>
+          <h3>Задача для ИИ</h3>
+          <textarea class="field" id="changePrompt" rows="5" placeholder="Опиши, что нужно изменить в проекте..."></textarea>
+          <button class="btn btn-blue" id="prepareBtn">Подготовить изменения</button>
           <div class="result" id="prepareResult"></div>
         </div>
-
         <div class="card">
           <h3>Ожидающие изменения</h3>
-          <div class="result" id="pendingResult">Пока нет загруженных изменений.</div>
-          <div class="action-row">
-            <button class="secondary" id="refreshPendingBtn">Обновить</button>
-            <button class="primary" id="applyBtn" style="padding:10px 14px">Применить и отправить в GitHub</button>
-            <button class="secondary danger" id="cancelBtn">Отменить</button>
+          <div class="result" id="pendingResult">Загружаем...</div>
+          <div class="actions">
+            <button class="btn" id="refreshPendingBtn">Обновить</button>
+            <button class="btn btn-blue" id="applyBtn">Применить в GitHub</button>
+            <button class="btn btn-danger" id="cancelBtn">Отменить</button>
           </div>
-          <div class="notice">Перед применением проверь подготовленные изменения. Отправка создаст коммит в выбранном репозитории.</div>
         </div>
-      </section>
+      </div></div>
+    </section>
 
-      <section class="panel" id="panel-profile">
-        <div class="section-head">
-          <h2>Профиль</h2>
-          <p>Настройки и подключённые аккаунты.</p>
-        </div>
-
+    <section class="workspace" id="view-profile">
+      <div class="section-scroll"><div class="section-inner">
+        <div class="section-heading"><h2>Профиль</h2><p>Аккаунт и статистика использования.</p></div>
         <div class="card">
-          <h3>Аккаунт</h3>
-          <div class="result" id="profileInfo">Проверяем авторизацию...</div>
-          <div class="action-row">
-            <button class="primary" id="loginBtn" style="padding:11px 15px">Войти</button>
-            <button class="secondary danger" id="logoutBtn">Выйти</button>
+          <div class="profile-top">
+            <div class="profile-avatar" id="profileAvatar">G</div>
+            <div><div class="profile-name" id="profileName">Гость</div><div class="profile-sub" id="profileProvider">Не авторизован</div></div>
           </div>
+          <div class="actions">
+            <button class="btn btn-blue" id="loginBtn">Войти</button>
+            <button class="btn btn-danger" id="logoutBtn">Выйти</button>
+          </div>
+          <div class="result" id="profileInfo"></div>
         </div>
-
+        <div class="card">
+          <h3>Общая статистика</h3>
+          <div class="stats-grid">
+            <div class="stat"><div class="stat-value" id="requestCount">—</div><div class="stat-label">Запросы на этом устройстве</div></div>
+            <div class="stat"><div class="stat-value" id="tokenCount">Нет данных</div><div class="stat-label">Использованные токены</div></div>
+            <div class="stat"><div class="stat-value" id="timeCount">—</div><div class="stat-label">Время на сайте на этом устройстве</div></div>
+            <div class="stat"><div class="stat-value" id="chatCount">—</div><div class="stat-label">Создано чатов на этом устройстве</div></div>
+          </div>
+          <div class="result">Запросы, чаты и время считаются локально на этом устройстве. Сервер пока не сохраняет общую статистику между устройствами. Учёт токенов пока не подключён к OpenRouter usage.</div>
+        </div>
         <div class="card">
           <h3>Модель ИИ</h3>
-          <div class="result" id="modelInfo">Загрузка информации о модели...</div>
+          <div class="result" id="modelInfo">Загрузка...</div>
         </div>
-
         <div class="card">
-          <h3>История чата</h3>
-          <button class="secondary danger" id="clearHistoryBtn">Очистить историю</button>
+          <h3>История текущего чата</h3>
+          <button class="btn btn-danger" id="clearHistoryBtn">Очистить историю чата</button>
         </div>
-      </section>
-    </main>
-  </div>
+      </div></div>
+    </section>
+  </main>
 </div>
 
 <div class="login-screen" id="loginScreen">
   <div class="login-card">
-    <div class="logo" style="margin-bottom:17px">🧠</div>
+    <div class="logo" style="margin-bottom:16px">G</div>
     <h2>Войти в Gubka-GPT</h2>
-    <p>Выбери способ авторизации, чтобы использовать чат и инструменты разработки.</p>
-
-    <button class="login-option" id="telegramLogin">
-      <span class="login-icon">✈</span>
-      <span>Продолжить через Telegram</span>
-    </button>
-
-    <button class="login-option" id="githubLogin">
-      <span class="login-icon">⌘</span>
-      <span>Продолжить через GitHub</span>
-    </button>
-
-    <div class="login-note">
-      Авторизация через GitHub позволяет подключить свои репозитории. Не отправляй никому свои пароли и токены.
-    </div>
-    <button class="secondary" id="closeLogin" style="width:100%;margin-top:15px">Закрыть</button>
+    <p>Выбери способ авторизации. Через GitHub можно подключить свои репозитории.</p>
+    <button class="login-option" id="telegramLogin"><span class="login-icon">✈</span>Продолжить через Telegram</button>
+    <button class="login-option" id="githubLogin"><span class="login-icon">⌘</span>Продолжить через GitHub</button>
+    <div class="login-note">Не передавай никому пароли и токены доступа.</div>
+    <button class="btn" id="closeLogin" style="width:100%;margin-top:15px">Закрыть</button>
   </div>
 </div>
 
 <script>
-  const tg = window.Telegram?.WebApp;
-  if (tg) {
-    tg.ready();
-    tg.expand();
+"use strict";
+
+const tg = window.Telegram?.WebApp;
+if(tg){tg.ready();tg.expand();}
+
+const $ = id => document.getElementById(id);
+const initData = tg?.initData || "";
+const STORAGE_KEY = "gubka_workspace_v3";
+const STATS_KEY = "gubka_stats_v1";
+
+let currentUser = null;
+let currentModel = "";
+let currentChatId = "";
+let currentFileContent = "";
+let currentRepoName = "";
+let chatStore = loadStore();
+let requestCount = Number(localStorage.getItem(STATS_KEY+"_requests")||0);
+let sessionStarted = Date.now();
+let totalTime = Number(localStorage.getItem(STATS_KEY+"_time")||0);
+let timerInterval = null;
+
+function loadStore(){
+  try{
+    const data=JSON.parse(localStorage.getItem(STORAGE_KEY)||"{}");
+    if(data.chats && Array.isArray(data.chats))return data;
+  }catch(e){}
+  return {chats:[],active:null};
+}
+function saveStore(){localStorage.setItem(STORAGE_KEY,JSON.stringify(chatStore));}
+function makeId(){return "c_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,9);}
+function createChat(){
+  const chat={id:makeId(),title:"Новый чат",created:Date.now()};
+  chatStore.chats.unshift(chat);
+  chatStore.active=chat.id;
+  saveStore();
+  renderChatList();
+  openChat(chat.id,true);
+}
+function activeChat(){return chatStore.chats.find(c=>c.id===currentChatId);}
+function authHeaders(){
+  const h={"Content-Type":"application/json"};
+  if(initData)h["X-Telegram-Init-Data"]=initData;
+  return h;
+}
+async function api(url,options={}){
+  const response=await fetch(url,{
+    credentials:"same-origin",
+    ...options,
+    headers:{...authHeaders(),...(options.headers||{})}
+  });
+  const raw=await response.text();
+  let data={};
+  try{data=raw?JSON.parse(raw):{};}catch(e){data={detail:raw,error:raw};}
+  if(!response.ok)throw new Error(data.error||data.detail||data.message||("HTTP "+response.status));
+  return data;
+}
+function setStatus(text,good=true){
+  $("connectionStatus").textContent=text;
+  $("statusDot").style.background=good?"#48bd83":"#d66a6a";
+}
+function showResult(el,msg,type=""){
+  el.textContent=msg;
+  el.className="result "+type;
+}
+function escapeText(value){return String(value??"");}
+function closeSidebar(){
+  $("sidebar").classList.remove("open");
+  $("overlay").classList.remove("show");
+}
+function toggleSidebar(){
+  if(innerWidth<=760){
+    $("sidebar").classList.toggle("open");
+    $("overlay").classList.toggle("show");
+  }else{
+    $("sidebar").classList.toggle("collapsed");
   }
+}
+$("menuBtn").onclick=toggleSidebar;
+$("collapseBtn").onclick=toggleSidebar;
+$("overlay").onclick=closeSidebar;
 
-  const initData = tg?.initData || "";
-  const $ = id => document.getElementById(id);
+function switchView(name){
+  document.querySelectorAll(".workspace").forEach(x=>x.classList.remove("active"));
+  document.querySelectorAll(".side-link").forEach(x=>x.classList.toggle("active",x.dataset.view===name));
+  const target=$("view-"+name);
+  if(target)target.classList.add("active");
+  const titles={chat:activeChat()?.title||"Новый чат",terminal:"Терминал",github:"GitHub",files:"Файлы проекта",changes:"Изменения кода",profile:"Профиль"};
+  $("topTitle").textContent=titles[name]||"Gubka-GPT";
+  if(innerWidth<=760)closeSidebar();
+  if(name==="github")loadRepos();
+  if(name==="files")loadFiles();
+  if(name==="changes")loadPending();
+}
+document.querySelectorAll(".side-link").forEach(b=>b.onclick=()=>switchView(b.dataset.view));
+$("accountButton").onclick=()=>switchView("profile");
 
-  let currentUser = null;
-  let currentFileContent = "";
-  let currentFilePath = "";
-
-  function authHeaders() {
-    const headers = { "Content-Type": "application/json" };
-    if (initData) headers["X-Telegram-Init-Data"] = initData;
-    return headers;
+function renderChatList(){
+  const list=$("chatList");list.innerHTML="";
+  if(!chatStore.chats.length){
+    const empty=document.createElement("div");empty.className="empty-note";empty.textContent="Пока нет чатов";list.append(empty);return;
   }
-
-  async function api(url, options = {}) {
-    const config = {
-      credentials: "same-origin",
-      ...options,
-      headers: {
-        ...authHeaders(),
-        ...(options.headers || {})
-      }
+  chatStore.chats.forEach(chat=>{
+    const row=document.createElement("div");row.className="chat-item"+(chat.id===currentChatId?" active":"");
+    const label=document.createElement("span");label.textContent="▤";label.style.color="#888";
+    const title=document.createElement("span");title.className="chat-title";title.textContent=chat.title||"Новый чат";
+    const del=document.createElement("button");del.className="chat-delete";del.textContent="×";del.title="Удалить чат";
+    del.onclick=async e=>{
+      e.stopPropagation();
+      if(!confirm("Удалить этот чат?"))return;
+      try{await api("/api/clear?chat_id="+encodeURIComponent(chat.id),{method:"POST",body:"{}"});}catch(e){}
+      chatStore.chats=chatStore.chats.filter(x=>x.id!==chat.id);
+      if(currentChatId===chat.id){currentChatId="";if(chatStore.chats.length)openChat(chatStore.chats[0].id);else createChat();}
+      saveStore();renderChatList();
     };
+    row.append(label,title,del);row.onclick=()=>openChat(chat.id);
+    list.append(row);
+  });
+}
+function clearChatDisplay(){
+  $("chatBox").innerHTML="";
+  const welcome=document.createElement("div");welcome.className="welcome";welcome.id="welcome";
+  welcome.innerHTML='<div class="welcome-mark">G</div><h1>Чем займёмся сегодня?</h1><p>Gubka-GPT поможет с кодом, GitHub, поиском ошибок и идеями.</p>';
+  $("chatBox").append(welcome);
+}
+function openChat(id,skipHistory=false){
+  const chat=chatStore.chats.find(c=>c.id===id);if(!chat)return;
+  currentChatId=id;chatStore.active=id;saveStore();renderChatList();
+  $("topTitle").textContent=chat.title||"Новый чат";
+  switchView("chat");
+  clearChatDisplay();
+  if(!skipHistory)loadHistory();
+}
+$("newChatBtn").onclick=createChat;
 
-    const response = await fetch(url, config);
-    const raw = await response.text();
-    let data;
+function addMessage(role,text){
+  $("welcome")?.remove();
+  const row=document.createElement("div");row.className="message-row "+(role==="user"?"user":"assistant");
+  const message=document.createElement("div");message.className="message";
+  const label=document.createElement("div");label.className="message-label";label.textContent=role==="user"?"ВЫ":"GUBKA-GPT";
+  const content=document.createElement("div");content.className="message-content";content.textContent=text;
+  message.append(label,content);
+  if(role!=="user"){
+    const actions=document.createElement("div");actions.className="message-actions";
+    const copy=document.createElement("button");copy.className="copy-btn";copy.textContent="Копировать";
+    copy.onclick=async()=>{
+      try{await navigator.clipboard.writeText(text);copy.textContent="Скопировано";setTimeout(()=>copy.textContent="Копировать",1300);}
+      catch(e){copy.textContent="Ошибка копирования";}
+    };
+    actions.append(copy);message.append(actions);
+  }
+  row.append(message);$("chatBox").append(row);
+  $("chatScroll").scrollTop=$("chatScroll").scrollHeight;
+}
+async function loadHistory(){
+  if(!currentChatId)return;
+  try{
+    const data=await api("/api/history?chat_id="+encodeURIComponent(currentChatId));
+    const messages=data.messages||data.history||[];
+    clearChatDisplay();
+    if(!messages.length)return;
+    messages.forEach(m=>addMessage(m.role==="user"?"user":"assistant",m.content||""));
+  }catch(e){console.warn("History:",e.message);}
+}
+async function sendMessage(){
+  const input=$("messageInput"),message=input.value.trim();
+  if(!message)return;
+  if(!currentChatId){createChat();}
+  const chat=activeChat();
+  if(chat&&chat.title==="Новый чат"){
+    chat.title=message.slice(0,38)+(message.length>38?"…":"");
+    $("topTitle").textContent=chat.title;saveStore();renderChatList();
+  }
+  input.value="";input.style.height="auto";
+  addMessage("user",message);
+  $("sendBtn").disabled=true;
+  const loading=document.createElement("div");loading.className="typing";loading.textContent="Gubka-GPT думает...";
+  $("chatBox").append(loading);$("chatScroll").scrollTop=$("chatScroll").scrollHeight;
+  try{
+    const data=await api("/api/chat",{
+      method:"POST",
+      body:JSON.stringify({message,chat_id:currentChatId})
+    });
+    loading.remove();
+    addMessage("assistant",String(data.answer??"Сервер не вернул ответ."));
+    if(data.model){currentModel=data.model;$("modelInfo").textContent="Модель: "+data.model;}
+    requestCount++;localStorage.setItem(STATS_KEY+"_requests",String(requestCount));updateStats();
+  }catch(e){
+    loading.remove();addMessage("assistant","Не удалось получить ответ: "+e.message);
+  }finally{$("sendBtn").disabled=false;input.focus();}
+}
+$("sendBtn").onclick=sendMessage;
+$("messageInput").addEventListener("keydown",e=>{
+  if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMessage();}
+});
+$("messageInput").addEventListener("input",function(){
+  this.style.height="auto";this.style.height=Math.min(this.scrollHeight,180)+"px";
+});
 
-    try { data = raw ? JSON.parse(raw) : {}; }
-    catch { data = { detail: raw, error: raw }; }
-
-    if (!response.ok) {
-      throw new Error(data.error || data.detail || data.message || `Ошибка ${response.status}`);
-    }
-
+async function loadMe(){
+  try{
+    const data=await api("/api/me");
+    currentUser=data.user||null;currentModel=data.model||"";
+    setStatus("Подключено");
+    const user=currentUser||{};
+    const name=user.first_name||user.login||"Пользователь";
+    const provider=user.provider||"Аккаунт";
+    $("sideUser").textContent=name;$("sideProvider").textContent=provider==="github"?"GitHub":"Telegram";
+    $("profileName").textContent=name;$("profileProvider").textContent="Вход через "+provider;
+    $("profileInfo").textContent="ID: "+(user.id||"не указан")+"\nЛогин: "+(user.login||"не указан");
+    $("modelInfo").textContent="Текущая модель: "+(data.model||"настроена на сервере");
+    $("currentRepo").textContent=data.repo||"Репозиторий пока не выбран.";
+    const photo=tg?.initDataUnsafe?.user?.photo_url||"";
+    setAvatar(photo,name);
+    $("loginBtn").style.display="none";$("logoutBtn").style.display="inline-block";
     return data;
+  }catch(e){
+    setStatus("Не авторизован",false);
+    $("sideUser").textContent="Гость";$("sideProvider").textContent="Нажми для входа";
+    $("profileName").textContent="Гость";$("profileProvider").textContent="Не авторизован";
+    $("profileInfo").textContent=e.message;
+    $("loginBtn").style.display="inline-block";$("logoutBtn").style.display="none";
+    return null;
   }
+}
+function setAvatar(url,name){
+  const targets=[$("sideAvatar"),$("profileAvatar")];
+  targets.forEach(el=>{
+    el.innerHTML="";
+    if(url){const img=document.createElement("img");img.src=url;img.alt="Аватар";el.append(img);}
+    else el.textContent=(name||"G").slice(0,1).toUpperCase();
+  });
+}
+async function loadRepos(){
+  const select=$("repoSelect");select.innerHTML='<option value="">Загрузка...</option>';
+  try{
+    const data=await api("/api/repos");
+    const repos=data.repositories||data.repos||[];
+    select.innerHTML='<option value="">Выбери репозиторий</option>';
+    repos.forEach(repo=>{
+      if(!repo.full_name)return;
+      const opt=document.createElement("option");opt.value=repo.full_name;
+      opt.textContent=repo.full_name+(repo.private?" 🔒":"");
+      opt.dataset.branch=repo.default_branch||"main";select.append(opt);
+    });
+    if(!repos.length)select.innerHTML='<option value="">Репозитории не найдены</option>';
+  }catch(e){select.innerHTML='<option value="">'+e.message+'</option>';}
+}
+$("loadReposBtn").onclick=loadRepos;
+$("selectRepoBtn").onclick=async()=>{
+  const repository=$("repoSelect").value;if(!repository)return;
+  const branch=$("repoSelect").selectedOptions[0]?.dataset.branch||"main";
+  try{
+    const data=await api("/api/select-repo",{method:"POST",body:JSON.stringify({repository,branch})});
+    showResult($("currentRepo"),"Выбран: "+(data.repository||repository)+" · "+(data.branch||branch),"success");
+    loadFiles();
+  }catch(e){showResult($("currentRepo"),e.message,"error");}
+};
+$("repoInfoBtn").onclick=async()=>{
+  try{const d=await api("/api/repo");showResult($("repoInfoResult"),JSON.stringify(d.info||d,null,2));}
+  catch(e){showResult($("repoInfoResult"),e.message,"error");}
+};
+$("createRepoBtn").onclick=async()=>{
+  const name=$("newRepoName").value.trim();if(!name){showResult($("createRepoResult"),"Введи название репозитория.","error");return;}
+  try{
+    const d=await api("/api/create-repo",{method:"POST",body:JSON.stringify({name,private:$("newRepoPrivate").checked})});
+    showResult($("createRepoResult"),"Создан: "+(d.name||name)+"\n"+(d.url||""),"success");loadRepos();
+  }catch(e){showResult($("createRepoResult"),e.message,"error");}
+};
+async function loadFiles(){
+  $("fileList").textContent="Загружаем...";
+  try{
+    const data=await api("/api/repo");
+    const files=data.files||[];const list=$("fileList");list.innerHTML="";
+    files.forEach(path=>{
+      const b=document.createElement("button");b.className="file-item";b.textContent=path;b.onclick=()=>readFile(path);list.append(b);
+    });
+    if(!files.length)list.textContent="Файлы не найдены.";
+  }catch(e){$("fileList").textContent=e.message;}
+}
+async function readFile(path){
+  $("selectedFileName").textContent="Загрузка: "+path;
+  try{
+    const d=await api("/api/read",{method:"POST",body:JSON.stringify({path})});
+    currentFileContent=d.content||"";$("selectedFileName").textContent=path;$("fileContent").textContent=currentFileContent;
+  }catch(e){$("fileContent").textContent=e.message;}
+}
+$("loadFilesBtn").onclick=loadFiles;
+$("copyFileBtn").onclick=async()=>{
+  if(!currentFileContent)return;
+  try{await navigator.clipboard.writeText(currentFileContent);$("copyFileBtn").textContent="Скопировано";setTimeout(()=>$("copyFileBtn").textContent="Скопировать содержимое",1300);}
+  catch(e){$("copyFileBtn").textContent="Не удалось скопировать";}
+};
+$("prepareBtn").onclick=async()=>{
+  const task=$("changePrompt").value.trim();if(!task){showResult($("prepareResult"),"Сначала опиши задачу.","error");return;}
+  $("prepareBtn").disabled=true;showResult($("prepareResult"),"ИИ готовит изменения...");
+  try{
+    const d=await api("/api/prepare",{method:"POST",body:JSON.stringify({task})});
+    showResult($("prepareResult"),d.summary||"Изменения подготовлены.","success");await loadPending();
+  }catch(e){showResult($("prepareResult"),e.message,"error");}
+  finally{$("prepareBtn").disabled=false;}
+};
+async function loadPending(){
+  try{
+    const d=await api("/api/pending");const p=d.pending;
+    if(!p){$("pendingResult").textContent="Нет ожидающих изменений.";return;}
+    $("pendingResult").textContent=(p.summary||"Изменения подготовлены")+"\n\nФайлы:\n"+(p.files||[]).join("\n")+"\n\nРепозиторий: "+(p.repository||"")+"\nВетка: "+(p.branch||"");
+  }catch(e){$("pendingResult").textContent=e.message;}
+}
+$("refreshPendingBtn").onclick=loadPending;
+$("applyBtn").onclick=async()=>{
+  if(!confirm("Отправить подготовленные изменения в GitHub?"))return;
+  $("applyBtn").disabled=true;
+  try{const d=await api("/api/apply",{method:"POST",body:"{}"});showResult($("pendingResult"),"Изменения отправлены.\n"+(d.url||""),"success");}
+  catch(e){showResult($("pendingResult"),e.message,"error");}
+  finally{$("applyBtn").disabled=false;}
+};
+$("cancelBtn").onclick=async()=>{
+  try{await api("/api/cancel",{method:"POST",body:"{}"});showResult($("pendingResult"),"Ожидающие изменения отменены.","success");}
+  catch(e){showResult($("pendingResult"),e.message,"error");}
+};
+$("clearHistoryBtn").onclick=async()=>{
+  if(!confirm("Очистить историю текущего чата?"))return;
+  try{
+    await api("/api/clear?chat_id="+encodeURIComponent(currentChatId),{method:"POST",body:"{}"});
+    clearChatDisplay();addMessage("assistant","История очищена. Можем начать заново.");
+  }catch(e){alert(e.message);}
+};
 
-  function showError(target, error) {
-    if (target) {
-      target.textContent = error.message || String(error);
-      target.className = "result error";
+function termWrite(text,cls=""){
+  const line=document.createElement("div");line.className="term-line "+cls;line.textContent=text;
+  $("terminalOutput").append(line);$("terminalOutput").scrollTop=$("terminalOutput").scrollHeight;
+}
+function termPrompt(command){termWrite("gubka $ "+command,"term-prompt");}
+function currentRepoPath(){return currentRepoName||$("currentRepo").textContent||"Не выбран";}
+async function runTerminal(raw){
+  const input=raw.trim();if(!input)return;
+  termPrompt(input);
+  const parts=input.match(/"[^"]*"|'[^']*'|\S+/g)||[];
+  const cmd=(parts.shift()||"").toLowerCase();
+  const arg=parts.join(" ").replace(/^["']|["']$/g,"");
+  try{
+    if(cmd==="help"){
+      termWrite("Доступные команды:");
+      termWrite("help             — список команд");
+      termWrite("clear            — очистить консоль");
+      termWrite("pwd              — текущий репозиторий и ветка");
+      termWrite("whoami           — текущий аккаунт");
+      termWrite("model            — текущая модель ИИ");
+      termWrite("repo             — информация о репозитории");
+      termWrite("ls               — список файлов");
+      termWrite("tree             — дерево файлов");
+      termWrite("cat <путь>       — прочитать файл");
+      termWrite("find <слово>     — поиск по именам файлов");
+      termWrite("git status       — статус репозитория");
+      termWrite("git log          — последний коммит");
+      termWrite("ask <вопрос>     — задать вопрос Gubka-GPT");
+      termWrite("Терминал работает с GitHub API. Произвольные команды ОС не исполняются.");
+    }else if(cmd==="clear"){
+      $("terminalOutput").innerHTML="";
+    }else if(cmd==="pwd"){
+      const d=await api("/api/me");
+      const repo=d.repo||"репозиторий не выбран";
+      termWrite(repo+" · "+(d.branch||"ветка по умолчанию"));
+    }else if(cmd==="whoami"){
+      const d=await api("/api/me");const u=d.user||{};
+      termWrite((u.first_name||u.login||"Пользователь")+" · "+(u.provider||"unknown")+" · ID "+(u.id||"?"));
+    }else if(cmd==="model"){
+      const d=await api("/api/me");termWrite("Модель: "+(d.model||"не указана"));
+    }else if(cmd==="repo"||(cmd==="git"&&parts[0]==="status")){
+      const d=await api("/api/repo");termWrite(JSON.stringify(d.info||d,null,2));
+    }else if(cmd==="ls"||cmd==="tree"){
+      const d=await api("/api/repo");const files=d.files||[];
+      termWrite(files.length?files.join("\n"):"Файлы не найдены.");
+      if(d.truncated)termWrite("GitHub сообщил, что дерево файлов обрезано.");
+    }else if(cmd==="cat"){
+      if(!arg){termWrite("Использование: cat main.py","term-error");return;}
+      const d=await api("/api/read",{method:"POST",body:JSON.stringify({path:arg})});
+      termWrite(d.content||"(пустой файл)");
+    }else if(cmd==="find"){
+      if(!arg){termWrite("Использование: find слово","term-error");return;}
+      const d=await api("/api/repo");const found=(d.files||[]).filter(x=>x.toLowerCase().includes(arg.toLowerCase()));
+      termWrite(found.length?found.join("\n"):"Совпадений по именам файлов нет.");
+    }else if(cmd==="git"&&parts[0]==="log"){
+      const d=await api("/api/repo");const i=d.info||{};
+      termWrite("Последний коммит: "+(i.last_commit||"неизвестно")+"\n"+(i.commit_message||""));
+    }else if(cmd==="ask"){
+      if(!arg){termWrite("Использование: ask твой вопрос","term-error");return;}
+      const d=await api("/api/chat",{method:"POST",body:JSON.stringify({message:arg,chat_id:currentChatId||"terminal"})});
+      termWrite(d.answer||"Пустой ответ.","term-success");
+    }else{
+      termWrite("Неизвестная команда. Введи help.","term-error");
     }
+  }catch(e){termWrite("Ошибка: "+e.message,"term-error");}
+}
+$("terminalInput").addEventListener("keydown",e=>{
+  if(e.key==="Enter"){
+    const v=e.target.value;e.target.value="";runTerminal(v);
   }
-
-  function showSuccess(target, message) {
-    if (target) {
-      target.textContent = message;
-      target.className = "result success";
-    }
-  }
-
-  function openPanel(name) {
-    document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-    document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
-
-    $("panel-" + name)?.classList.add("active");
-    document.querySelector(`[data-panel="${name}"]`)?.classList.add("active");
-  }
-
-  document.querySelectorAll(".nav-btn").forEach(button => {
-    button.addEventListener("click", () => openPanel(button.dataset.panel));
-  });
-
-  function addMessage(role, text) {
-    const box = $("chatBox");
-    const message = document.createElement("div");
-    message.className = "message " + (role === "user" ? "user" : "");
-
-    const label = document.createElement("div");
-    label.className = "message-label";
-    label.textContent = role === "user" ? "ВЫ" : "GUBKA-GPT";
-
-    const content = document.createElement("div");
-    content.className = "message-content";
-    content.textContent = text;
-
-    message.append(label, content);
-
-    if (role !== "user") {
-      const copy = document.createElement("button");
-      copy.className = "copy-message";
-      copy.textContent = "Скопировать";
-      copy.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(text);
-          copy.textContent = "Скопировано";
-          setTimeout(() => copy.textContent = "Скопировать", 1500);
-        } catch {
-          copy.textContent = "Не удалось скопировать";
-        }
-      });
-      message.append(copy);
-    }
-
-    box.append(message);
-    box.scrollTop = box.scrollHeight;
-  }
-
-  async function sendMessage() {
-    const input = $("messageInput");
-    const message = input.value.trim();
-    if (!message) return;
-
-    input.value = "";
-    addMessage("user", message);
-    $("sendBtn").disabled = true;
-
-    const loading = document.createElement("div");
-    loading.className = "loading";
-    loading.textContent = "Gubka-GPT думает...";
-    $("chatBox").append(loading);
-    $("chatBox").scrollTop = $("chatBox").scrollHeight;
-
-    try {
-      const data = await api("/api/chat", {
-        method: "POST",
-        body: JSON.stringify({ message, initData })
-      });
-
-      loading.remove();
-
-      const answer =
-        data.answer ??
-        data.response ??
-        data.reply ??
-        data.message ??
-        "Сервер получил запрос, но не вернул текст ответа.";
-
-      addMessage("assistant", typeof answer === "string" ? answer : JSON.stringify(answer, null, 2));
-    } catch (error) {
-      loading.remove();
-      addMessage("assistant", "Не удалось получить ответ: " + error.message);
-    } finally {
-      $("sendBtn").disabled = false;
-      input.focus();
-    }
-  }
-
-  $("sendBtn").addEventListener("click", sendMessage);
-
-  $("messageInput").addEventListener("keydown", event => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      sendMessage();
-    }
-  });
-
-  $("messageInput").addEventListener("input", function() {
-    this.style.height = "auto";
-    this.style.height = Math.min(this.scrollHeight, 150) + "px";
-  });
-
-  async function loadMe() {
-    try {
-      const data = await api("/api/me");
-      currentUser = data.user || data;
-      $("connectionStatus").textContent = "Подключено";
-
-      const name =
-        currentUser.username ||
-        currentUser.login ||
-        currentUser.first_name ||
-        currentUser.name ||
-        "Пользователь";
-
-      const provider = data.provider || currentUser.provider || "Аккаунт";
-
-      $("sideUser").textContent = name;
-      $("sideProvider").textContent = provider;
-      $("profileInfo").textContent =
-        "Пользователь: " + name +
-        "\nСпособ входа: " + provider +
-        "\nID: " + (currentUser.id || "не указан");
-
-      $("modelInfo").textContent =
-        "Текущая модель: " + (data.model || "настроена на сервере");
-
-      const repo = data.repo || data.repository || "";
-      const branch = data.branch || "";
-      $("currentRepo").textContent = repo
-        ? repo + (branch ? " · ветка " + branch : "")
-        : "Репозиторий пока не выбран.";
-
-      if (data.authenticated === false || data.user === null) {
-        $("loginScreen").classList.add("show");
-      }
-
-      return data;
-    } catch (error) {
-      $("connectionStatus").textContent = "Нет соединения";
-      $("profileInfo").textContent = error.message;
-      $("loginScreen").classList.add("show");
-      return null;
-    }
-  }
-
-  async function loadHistory() {
-    try {
-      const data = await api("/api/history");
-      const messages = data.history || data.messages || [];
-
-      if (!Array.isArray(messages) || !messages.length) return;
-
-      $("chatBox").innerHTML = "";
-
-      messages.forEach(item => {
-        const role = item.role === "user" ? "user" : "assistant";
-        const content = item.content ?? item.message ?? item.text ?? "";
-        if (typeof content === "string") addMessage(role, content);
-      });
-    } catch (error) {
-      console.warn("История не загружена:", error.message);
-    }
-  }
-
-  async function loadRepos() {
-    const select = $("repoSelect");
-    select.innerHTML = '<option value="">Загрузка...</option>';
-
-    try {
-      const data = await api("/api/repos");
-      const repos = data.repos || data.repositories || [];
-
-      select.innerHTML = '<option value="">Выбери репозиторий</option>';
-
-      repos.forEach(repo => {
-        const fullName = repo.full_name || repo.name;
-        if (!fullName) return;
-
-        const option = document.createElement("option");
-        option.value = fullName;
-        option.textContent = fullName + (repo.private ? " 🔒" : "");
-        option.dataset.branch = repo.default_branch || "main";
-        select.append(option);
-      });
-
-      if (!repos.length) {
-        select.innerHTML = '<option value="">Репозитории не найдены</option>';
-      }
-    } catch (error) {
-      select.innerHTML = '<option value="">Не удалось загрузить</option>';
-      $("currentRepo").textContent = error.message;
-    }
-  }
-
-  $("loadReposBtn").addEventListener("click", loadRepos);
-
-  $("selectRepoBtn").addEventListener("click", async () => {
-    const repo = $("repoSelect").value;
-    if (!repo) return;
-
-    const option = $("repoSelect").selectedOptions[0];
-    const branch = option?.dataset.branch || "main";
-
-    try {
-      const data = await api("/api/select-repo", {
-        method: "POST",
-        body: JSON.stringify({ repo, branch, initData })
-      });
-
-      $("currentRepo").textContent =
-        data.repo || repo + " · ветка " + (data.branch || branch);
-
-      showSuccess($("currentRepo"), "Выбран репозиторий: " + repo);
-    } catch (error) {
-      showError($("currentRepo"), error);
-    }
-  });
-
-  $("repoInfoBtn").addEventListener("click", async () => {
-    try {
-      const data = await api("/api/repo");
-      $("repoInfoResult").textContent = JSON.stringify(data, null, 2);
-    } catch (error) {
-      showError($("repoInfoResult"), error);
-    }
-  });
-
-  $("createRepoBtn").addEventListener("click", async () => {
-    const name = $("newRepoName").value.trim();
-    const description = $("newRepoDescription").value.trim();
-    const isPrivate = $("newRepoPrivate").checked;
-
-    if (!name) {
-      $("createRepoResult").textContent = "Введи название репозитория.";
-      return;
-    }
-
-    try {
-      const data = await api("/api/create-repo", {
-        method: "POST",
-        body: JSON.stringify({
-          name,
-          description,
-          private: isPrivate,
-          initData
-        })
-      });
-
-      showSuccess(
-        $("createRepoResult"),
-        data.message || data.full_name || "Репозиторий создан."
-      );
-      await loadRepos();
-    } catch (error) {
-      showError($("createRepoResult"), error);
-    }
-  });
-
-  async function loadFiles() {
-    const list = $("fileList");
-    list.innerHTML = '<div class="loading">Загрузка файлов...</div>';
-
-    try {
-      const data = await api("/api/repo");
-      const files = data.files || data.tree || [];
-
-      list.innerHTML = "";
-
-      if (Array.isArray(files)) {
-        files.forEach(file => {
-          const path = typeof file === "string" ? file : file.path;
-          if (!path) return;
-
-          const button = document.createElement("button");
-          button.className = "file-item";
-          button.textContent = path;
-          button.addEventListener("click", () => readFile(path));
-          list.append(button);
-        });
-      }
-
-      if (!list.children.length) {
-        list.textContent = "Список файлов не получен. Проверь подключение репозитория.";
-      }
-    } catch (error) {
-      list.textContent = error.message;
-    }
-  }
-
-  async function readFile(path) {
-    $("selectedFileName").textContent = "Загружаем: " + path;
-    $("fileContent").textContent = "";
-
-    try {
-      const data = await api("/api/read", {
-        method: "POST",
-        body: JSON.stringify({ path, initData })
-      });
-
-      currentFilePath = path;
-      currentFileContent = data.content || data.text || "";
-
-      $("selectedFileName").textContent = path;
-      $("fileContent").textContent = currentFileContent;
-    } catch (error) {
-      $("fileContent").textContent = error.message;
-    }
-  }
-
-  $("loadFilesBtn").addEventListener("click", loadFiles);
-
-  $("copyFileBtn").addEventListener("click", async () => {
-    if (!currentFileContent) return;
-    try {
-      await navigator.clipboard.writeText(currentFileContent);
-      $("copyFileBtn").textContent = "Скопировано";
-      setTimeout(() => $("copyFileBtn").textContent = "Скопировать содержимое", 1500);
-    } catch {
-      $("copyFileBtn").textContent = "Не удалось скопировать";
-    }
-  });
-
-  $("prepareBtn").addEventListener("click", async () => {
-    const prompt = $("changePrompt").value.trim();
-    if (!prompt) {
-      $("prepareResult").textContent = "Сначала опиши, что нужно изменить.";
-      return;
-    }
-
-    $("prepareBtn").disabled = true;
-    $("prepareResult").textContent = "ИИ готовит изменения...";
-
-    try {
-      const data = await api("/api/prepare", {
-        method: "POST",
-        body: JSON.stringify({ prompt, request: prompt, initData })
-      });
-
-      showSuccess(
-        $("prepareResult"),
-        data.message || data.status || "Изменения подготовлены. Проверь ожидающие изменения."
-      );
-
-      await loadPending();
-    } catch (error) {
-      showError($("prepareResult"), error);
-    } finally {
-      $("prepareBtn").disabled = false;
-    }
-  });
-
-  async function loadPending() {
-    try {
-      const data = await api("/api/pending");
-      const pending = data.pending ?? data.changes ?? data;
-
-      $("pendingResult").textContent =
-        typeof pending === "string"
-          ? pending
-          : JSON.stringify(pending, null, 2);
-    } catch (error) {
-      $("pendingResult").textContent = error.message;
-    }
-  }
-
-  $("refreshPendingBtn").addEventListener("click", loadPending);
-
-  $("applyBtn").addEventListener("click", async () => {
-    if (!confirm("Отправить подготовленные изменения в GitHub?")) return;
-
-    $("applyBtn").disabled = true;
-
-    try {
-      const data = await api("/api/apply", {
-        method: "POST",
-        body: JSON.stringify({ initData })
-      });
-
-      showSuccess(
-        $("pendingResult"),
-        data.message || data.commit_url || "Изменения отправлены."
-      );
-
-      await loadPending();
-    } catch (error) {
-      showError($("pendingResult"), error);
-    } finally {
-      $("applyBtn").disabled = false;
-    }
-  });
-
-  $("cancelBtn").addEventListener("click", async () => {
-    try {
-      const data = await api("/api/cancel", {
-        method: "POST",
-        body: JSON.stringify({ initData })
-      });
-
-      showSuccess(
-        $("pendingResult"),
-        data.message || "Ожидающие изменения отменены."
-      );
-
-      await loadPending();
-    } catch (error) {
-      showError($("pendingResult"), error);
-    }
-  });
-
-  $("clearHistoryBtn").addEventListener("click", async () => {
-    if (!confirm("Очистить историю переписки?")) return;
-
-    try {
-      await api("/api/clear", {
-        method: "POST",
-        body: JSON.stringify({ initData })
-      });
-
-      $("chatBox").innerHTML = "";
-      addMessage("assistant", "История очищена. Можем начать заново.");
-    } catch (error) {
-      alert(error.message);
-    }
-  });
-
-  $("loginBtn").addEventListener("click", () => {
-    $("loginScreen").classList.add("show");
-  });
-
-  $("closeLogin").addEventListener("click", () => {
-    $("loginScreen").classList.remove("show");
-  });
-
-  $("githubLogin").addEventListener("click", () => {
-    window.location.href = "/auth/github";
-  });
-
-  $("telegramLogin").addEventListener("click", () => {
-    if (tg && tg.initData) {
-      $("loginScreen").classList.remove("show");
-      loadMe();
-    } else {
-      window.location.href = "https://t.me/gubkagpt_bot";
-    }
-  });
-
-  $("logoutBtn").addEventListener("click", async () => {
-    try {
-      await fetch("/auth/logout", {
-        method: "POST",
-        credentials: "same-origin"
-      });
-    } catch {}
-
-    window.location.reload();
-  });
-
-  async function startApp() {
-    const me = await loadMe();
-
-    if (me) {
-      await loadHistory();
-      await loadPending();
-    }
-  }
-
-  startApp();
+});
+$("terminalClear").onclick=()=>$("terminalOutput").innerHTML="";
+
+$("loginBtn").onclick=()=>$("loginScreen").classList.add("show");
+$("closeLogin").onclick=()=>$("loginScreen").classList.remove("show");
+$("githubLogin").onclick=()=>location.href="/auth/github";
+$("telegramLogin").onclick=()=>{
+  if(tg&&initData){$("loginScreen").classList.remove("show");loadMe();}
+  else location.href="https://t.me/gubkagpt_bot";
+};
+$("logoutBtn").onclick=async()=>{
+  try{await fetch("/auth/logout",{method:"POST",credentials:"same-origin"});}catch(e){}
+  location.reload();
+};
+
+function updateStats(){
+  $("requestCount").textContent=requestCount;
+  $("chatCount").textContent=chatStore.chats.length;
+  const seconds=Math.floor((totalTime+Date.now()-sessionStarted)/1000);
+  const mins=Math.floor(seconds/60);
+  $("timeCount").textContent=mins<60?mins+" мин.":Math.floor(mins/60)+" ч. "+(mins%60)+" мин.";
+  $("tokenCount").textContent="Нет данных";
+}
+timerInterval=setInterval(()=>{
+  totalTime+=0;
+  localStorage.setItem(STATS_KEY+"_time",String(totalTime+Date.now()-sessionStarted));
+  updateStats();
+},10000);
+
+async function startApp(){
+  renderChatList();
+  if(!chatStore.chats.length)createChat();
+  else openChat(chatStore.active&&chatStore.chats.some(c=>c.id===chatStore.active)?chatStore.active:chatStore.chats[0].id);
+  await loadMe();
+  updateStats();
+  loadPending();
+}
+startApp();
 </script>
 </body>
 </html>
