@@ -3,282 +3,275 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=yes, maximum-scale=5">
 <meta name="theme-color" content="#101010">
 <title>Gubka-GPT</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-:root{
-  --bg:#101010;
-  --side:#171717;
-  --panel:#1c1c1c;
-  --panel2:#232323;
-  --border:#303030;
-  --text:#ececec;
-  --muted:#999;
-  --blue:#2878e8;
-  --blue-hover:#3989fa;
-  --danger:#e05a65;
+:root {
+  --bg:#101010; --side:#171717; --panel:#1c1c1c;
+  --border:#303030; --text:#ededed; --muted:#929292;
+  --blue:#2878e8; --blue-hover:#3989fa;
 }
-*{box-sizing:border-box}
-html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-body{overflow:hidden}
-button,input,textarea,select{font:inherit}
-button{cursor:pointer}
-button:disabled{opacity:.5;cursor:not-allowed}
-#app{height:100dvh;display:flex;overflow:hidden}
-.sidebar{
-  width:270px;flex-shrink:0;background:var(--side);
+* { box-sizing:border-box; }
+html,body {
+  margin:0; padding:0; width:100%; height:100%;
+  background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  overflow:hidden; -webkit-text-size-adjust:100%;
+}
+button,input,textarea,select { font:inherit; }
+button { cursor:pointer; }
+button:disabled { opacity:.5; cursor:not-allowed; }
+#app {
+  position:fixed; inset:0; width:100%;
+  height:100vh; height:100svh;
+  display:flex; overflow:hidden;
+}
+.sidebar {
+  width:270px; flex-shrink:0; background:var(--side);
   border-right:1px solid var(--border);
-  display:flex;flex-direction:column;padding:13px;
-  transition:transform .25s,width .25s;
-  z-index:20;
+  display:flex; flex-direction:column; padding:13px;
+  transition:transform .22s,width .22s; z-index:30;
 }
-.sidebar-top{display:flex;align-items:center;gap:10px;margin-bottom:20px}
-.brand{display:flex;align-items:center;gap:10px;min-width:0;flex:1}
-.logo{
-  width:34px;height:34px;border-radius:11px;
-  background:#252525;border:1px solid #414141;
-  display:grid;place-items:center;font-weight:800;font-size:17px;
+.sidebar-top { display:flex; align-items:center; gap:10px; margin-bottom:20px; }
+.brand { display:flex; align-items:center; gap:10px; flex:1; min-width:0; }
+.logo {
+  width:35px;height:35px;border-radius:11px;background:#252525;
+  border:1px solid #414141;display:grid;place-items:center;
+  font-weight:800;font-size:18px;
 }
-.brand-name{font-size:15px;font-weight:700;letter-spacing:-.3px}
-.icon-btn{
-  border:0;background:transparent;color:#aaa;border-radius:9px;
-  width:36px;height:36px;display:grid;place-items:center;font-size:19px;
+.brand-name { font-size:15px;font-weight:700; }
+.icon-btn {
+  width:38px;height:38px;border:0;border-radius:9px;
+  background:transparent;color:#aaa;font-size:20px;
+  display:grid;place-items:center;
 }
-.icon-btn:hover{background:#292929;color:white}
-.new-chat{
-  width:100%;padding:11px 12px;border:1px solid #383838;
-  border-radius:10px;background:#222;color:#eee;text-align:left;
-  font-size:13px;margin-bottom:19px;
+.icon-btn:hover { background:#292929;color:white; }
+.new-chat,.login-side {
+  width:100%;padding:12px;border:1px solid #383838;
+  border-radius:10px;background:#222;color:#eee;
+  text-align:left;font-size:13px;margin-bottom:10px;
 }
-.new-chat:hover{background:#2b2b2b}
-.side-label{
+.new-chat:hover,.login-side:hover { background:#2b2b2b; }
+.login-side { display:flex;align-items:center;gap:10px; }
+.side-label {
   color:#777;font-size:10px;text-transform:uppercase;
-  letter-spacing:1px;margin:4px 8px 9px;
+  letter-spacing:1px;margin:12px 8px 9px;
 }
-.chat-list{flex:1;overflow-y:auto;min-height:50px}
-.chat-item{
+.chat-list { flex:1;overflow-y:auto;min-height:50px; }
+.chat-item {
   display:flex;align-items:center;gap:8px;padding:10px;
   border-radius:9px;color:#c5c5c5;font-size:12px;
   cursor:pointer;margin-bottom:3px;
 }
-.chat-item:hover,.chat-item.active{background:#292929;color:white}
-.chat-item .chat-title{
-  flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-.chat-delete{border:0;background:none;color:#777;padding:3px;font-size:15px}
-.chat-delete:hover{color:#ff7777}
-.side-tools{border-top:1px solid var(--border);padding-top:12px;margin-top:12px}
-.side-link{
+.chat-item:hover,.chat-item.active { background:#292929;color:white; }
+.chat-title { flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.chat-delete { border:0;background:none;color:#777;padding:3px;font-size:16px; }
+.side-tools { border-top:1px solid var(--border);padding-top:10px;margin-top:10px; }
+.side-link {
   display:flex;align-items:center;gap:11px;width:100%;
   padding:11px 10px;border:0;border-radius:9px;
   background:transparent;color:#c8c8c8;text-align:left;font-size:13px;
 }
-.side-link:hover,.side-link.active{background:#292929;color:white}
-.account{
-  margin-top:12px;padding:10px;border-radius:11px;
+.side-link:hover,.side-link.active { background:#292929;color:white; }
+.account {
+  margin-top:10px;padding:10px;border-radius:11px;
   display:flex;align-items:center;gap:10px;cursor:pointer;
 }
-.account:hover{background:#292929}
-.avatar{
-  width:34px;height:34px;border-radius:50%;background:#303030;
+.account:hover { background:#292929; }
+.avatar {
+  width:35px;height:35px;border-radius:50%;background:#303030;
   display:grid;place-items:center;overflow:hidden;flex-shrink:0;
   font-weight:700;color:#ddd;
 }
-.avatar img{width:100%;height:100%;object-fit:cover}
-.account-text{min-width:0;flex:1}
-.account-name{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis}
-.account-sub{font-size:10px;color:#888;margin-top:4px}
-.main{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
-.topbar{
+.avatar img { width:100%;height:100%;object-fit:cover; }
+.account-text { min-width:0;flex:1; }
+.account-name { font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis; }
+.account-sub { font-size:10px;color:#888;margin-top:4px; }
+.main { flex:1;min-width:0;display:flex;flex-direction:column;position:relative; }
+.topbar {
   height:58px;flex-shrink:0;display:flex;align-items:center;
-  gap:12px;padding:0 19px;border-bottom:1px solid #252525;
+  gap:12px;padding:0 18px;border-bottom:1px solid #252525;
 }
-.top-title{font-size:14px;font-weight:600;flex:1}
-.top-status{font-size:11px;color:#858585;display:flex;align-items:center;gap:7px}
-.status-dot{width:7px;height:7px;border-radius:50%;background:#48bd83}
-.workspace{flex:1;min-height:0;display:none;flex-direction:column;overflow:hidden}
-.workspace.active{display:flex}
-.chat-scroll{
+.top-title { font-size:14px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.top-status { font-size:11px;color:#858585;display:flex;align-items:center;gap:7px; }
+.status-dot { width:7px;height:7px;border-radius:50%;background:#777; }
+.workspace { flex:1;min-height:0;display:none;flex-direction:column;overflow:hidden; }
+.workspace.active { display:flex; }
+.chat-scroll {
   flex:1;overflow-y:auto;min-height:0;padding:28px 18px 20px;
-  scroll-behavior:smooth;
+  overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
 }
-.chat-inner{max-width:790px;margin:0 auto;width:100%}
-.welcome{text-align:center;padding:11vh 10px 35px}
-.welcome-mark{
-  width:52px;height:52px;margin:0 auto 20px;border-radius:17px;
+.chat-inner { max-width:790px;margin:0 auto;width:100%; }
+.welcome { text-align:center;padding:11vh 10px 35px; }
+.welcome-mark {
+  width:53px;height:53px;margin:0 auto 20px;border-radius:17px;
   display:grid;place-items:center;background:#252525;
   border:1px solid #3a3a3a;font-size:23px;font-weight:800;
 }
-.welcome h1{font-size:27px;letter-spacing:-.8px;margin:0 0 10px}
-.welcome p{color:#888;font-size:13px;line-height:1.6;margin:0}
-.message-row{display:flex;margin:0 0 24px;animation:appear .2s ease}
-@keyframes appear{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
-.message-row.user{justify-content:flex-end}
-.message{
-  max-width:88%;min-width:0;padding:13px 15px;
-  border-radius:17px;background:#222;
-  font-size:14px;line-height:1.7;overflow-wrap:anywhere;
+.welcome h1 { font-size:27px;letter-spacing:-.8px;margin:0 0 10px; }
+.welcome p { color:#888;font-size:13px;line-height:1.6;margin:0; }
+.message-row { display:flex;margin:0 0 24px;animation:appear .18s ease; }
+@keyframes appear { from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)} }
+.message-row.user { justify-content:flex-end; }
+.message {
+  max-width:90%;min-width:0;padding:13px 15px;
+  border-radius:17px;background:#222;font-size:14px;
+  line-height:1.7;overflow-wrap:anywhere;
 }
-.message-row.user .message{
+.message-row.user .message {
   background:var(--blue);color:white;border-radius:17px 17px 5px 17px;
 }
-.message-row.assistant .message{background:transparent;padding-left:0}
-.message-label{font-size:10px;color:#888;margin-bottom:7px;font-weight:700;letter-spacing:.4px}
-.message-row.user .message-label{color:#d6e6ff}
-.message-content{white-space:pre-wrap}
-.message-content pre{
+.message-row.assistant .message { background:transparent;padding-left:0; }
+.message-label { font-size:10px;color:#888;margin-bottom:7px;font-weight:700;letter-spacing:.4px; }
+.message-row.user .message-label { color:#d6e6ff; }
+.message-content { white-space:pre-wrap;overflow-wrap:anywhere; }
+.message-content pre {
   white-space:pre;overflow:auto;padding:13px;background:#111;
   border:1px solid #353535;border-radius:10px;font-size:12px;
 }
-.message-content code{font-family:ui-monospace,monospace;color:#b6d4ff}
-.message-actions{display:flex;gap:6px;margin-top:8px}
-.copy-btn{
-  border:0;background:transparent;color:#858585;
-  padding:5px 7px;font-size:11px;border-radius:6px;
-}
-.copy-btn:hover{background:#292929;color:white}
-.composer-area{padding:12px 18px 17px;flex-shrink:0}
-.composer-wrap{max-width:790px;margin:auto}
-.composer{
+.message-actions { display:flex;gap:6px;margin-top:8px; }
+.copy-btn { border:0;background:transparent;color:#858585;padding:5px 7px;font-size:11px;border-radius:6px; }
+.copy-btn:hover { background:#292929;color:white; }
+.composer-area { padding:12px 18px 16px;flex-shrink:0;background:var(--bg); }
+.composer-wrap { max-width:790px;margin:auto; }
+.composer {
   display:flex;align-items:flex-end;gap:9px;
   background:#222;border:1px solid #3b3b3b;
-  border-radius:17px;padding:9px 10px 9px 15px;
-  transition:border-color .2s;
+  border-radius:17px;padding:8px 9px 8px 15px;
 }
-.composer:focus-within{border-color:#555}
-#messageInput{
-  flex:1;min-width:0;resize:none;max-height:180px;min-height:37px;
+.composer:focus-within { border-color:#555; }
+#messageInput {
+  flex:1;min-width:0;resize:none;max-height:140px;min-height:40px;
   background:transparent;border:0;outline:0;color:white;
-  padding:8px 0;font-size:14px;line-height:1.5;
+  padding:9px 0;font-size:16px;line-height:1.4;
+  -webkit-appearance:none;appearance:none;
 }
-#messageInput::placeholder{color:#777}
-.send-btn{
-  width:37px;height:37px;border:0;border-radius:11px;
-  background:var(--blue);color:white;font-size:18px;
+#messageInput::placeholder { color:#777; }
+.send-btn {
+  width:39px;height:39px;border:0;border-radius:11px;
+  background:var(--blue);color:white;font-size:20px;
   display:grid;place-items:center;flex-shrink:0;
 }
-.send-btn:hover{background:var(--blue-hover)}
-.composer-note{text-align:center;color:#666;font-size:10px;margin-top:9px}
-.typing{color:#999;font-size:12px;padding:10px 0}
-.empty-note{color:#777;font-size:12px;padding:12px}
-.section-scroll{overflow-y:auto;padding:25px 22px;flex:1}
-.section-inner{max-width:850px;margin:auto}
-.section-heading{margin-bottom:22px}
-.section-heading h2{font-size:23px;margin:0 0 8px}
-.section-heading p{font-size:12px;color:#888;line-height:1.6;margin:0}
-.card{
-  background:#191919;border:1px solid #303030;
-  border-radius:14px;padding:17px;margin-bottom:13px;
+.send-btn:hover { background:var(--blue-hover); }
+.composer-note { text-align:center;color:#666;font-size:10px;margin-top:8px; }
+.typing { color:#999;font-size:12px;padding:10px 0; }
+.empty-note { color:#777;font-size:12px;padding:12px; }
+.section-scroll {
+  overflow-y:auto;padding:24px 22px;flex:1;
+  overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
 }
-.card h3{font-size:13px;margin:0 0 13px}
-.field{
-  width:100%;padding:11px 12px;margin-bottom:10px;
+.section-inner { max-width:850px;margin:auto; }
+.section-heading { margin-bottom:20px; }
+.section-heading h2 { font-size:23px;margin:0 0 8px; }
+.section-heading p { font-size:12px;color:#888;line-height:1.6;margin:0; }
+.card { background:#191919;border:1px solid #303030;border-radius:14px;padding:17px;margin-bottom:13px; }
+.card h3 { font-size:13px;margin:0 0 13px; }
+.field {
+  width:100%;padding:12px;margin-bottom:10px;
   border:1px solid #383838;border-radius:9px;
-  background:#111;color:white;outline:0;font-size:13px;
+  background:#111;color:white;outline:0;font-size:16px;
 }
-.field:focus{border-color:#666}
-textarea.field{resize:vertical;line-height:1.5}
-.btn{
+.field:focus { border-color:#666; }
+textarea.field { resize:vertical;line-height:1.5; }
+.btn {
   border:1px solid #3a3a3a;border-radius:9px;
-  background:#292929;color:#ddd;padding:10px 13px;font-size:12px;
+  background:#292929;color:#ddd;padding:10px 13px;font-size:13px;
 }
-.btn:hover{background:#333}
-.btn-blue{background:var(--blue);border-color:var(--blue);color:white}
-.btn-blue:hover{background:var(--blue-hover)}
-.btn-danger{color:#f18a92;border-color:#583238;background:#291b1d}
-.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px}
-.result{font-size:12px;color:#aaa;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:10px}
-.result.error{color:#ff8585}
-.result.success{color:#70d8a4}
-.file-list{display:flex;flex-direction:column;gap:5px;margin-top:12px}
-.file-item{
-  width:100%;text-align:left;padding:10px 12px;
+.btn:hover { background:#333; }
+.btn-blue { background:var(--blue);border-color:var(--blue);color:white; }
+.btn-blue:hover { background:var(--blue-hover); }
+.btn-danger { color:#f18a92;border-color:#583238;background:#291b1d; }
+.actions { display:flex;flex-wrap:wrap;gap:8px;margin-top:9px; }
+.result { font-size:12px;color:#aaa;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:10px; }
+.result.error { color:#ff8585; }
+.result.success { color:#70d8a4; }
+.file-list { display:flex;flex-direction:column;gap:5px;margin-top:12px; }
+.file-item {
+  width:100%;text-align:left;padding:11px 12px;
   border:1px solid #303030;border-radius:8px;background:#202020;
-  color:#ccc;font-size:12px;overflow-wrap:anywhere;
+  color:#ccc;font-size:13px;overflow-wrap:anywhere;
 }
-.file-item:hover{border-color:#666;background:#282828}
-.file-view{
+.file-item:hover { border-color:#666;background:#282828; }
+.file-view {
   white-space:pre-wrap;overflow:auto;max-height:430px;
   background:#101010;border:1px solid #303030;border-radius:9px;
   padding:13px;color:#ccc;font:12px/1.6 ui-monospace,monospace;
 }
-.terminal{
+.terminal {
   flex:1;min-height:0;display:flex;flex-direction:column;
   background:#0c0c0c;border:1px solid #303030;border-radius:12px;overflow:hidden;
 }
-.terminal-head{
-  height:39px;flex-shrink:0;display:flex;align-items:center;
+.terminal-head {
+  height:42px;flex-shrink:0;display:flex;align-items:center;
   justify-content:space-between;padding:0 12px;
-  background:#1b1b1b;border-bottom:1px solid #303030;
-  color:#aaa;font-size:11px;
+  background:#1b1b1b;border-bottom:1px solid #303030;color:#aaa;font-size:11px;
 }
-.terminal-output{
-  flex:1;min-height:180px;overflow:auto;padding:14px;
+.terminal-output {
+  flex:1;min-height:130px;overflow:auto;padding:14px;
   font:12px/1.7 ui-monospace,SFMono-Regular,monospace;
   color:#c8c8c8;white-space:pre-wrap;overflow-wrap:anywhere;
+  -webkit-overflow-scrolling:touch;
 }
-.term-line{margin-bottom:5px}
-.term-prompt{color:#7daeff}
-.term-error{color:#ff8585}
-.term-success{color:#7bd8a2}
-.terminal-input-row{
-  display:flex;gap:9px;align-items:center;padding:11px 13px;
+.term-line { margin-bottom:5px; }
+.term-prompt { color:#aaa; }
+.term-error { color:#ff8585; }
+.term-success { color:#7bd8a2; }
+.terminal-input-row {
+  display:flex;gap:9px;align-items:center;padding:12px 13px;
   border-top:1px solid #303030;background:#151515;
 }
-.terminal-prefix{color:#7daeff;font:12px monospace}
-#terminalInput{
+.terminal-prefix { color:#aaa;font:13px monospace; }
+#terminalInput {
   flex:1;min-width:0;background:transparent;border:0;outline:0;
-  color:white;font:12px monospace;
+  color:white;font:16px ui-monospace,monospace;
+  -webkit-appearance:none;appearance:none;
 }
-.profile-top{display:flex;align-items:center;gap:15px}
-.profile-avatar{width:65px;height:65px;border-radius:50%;overflow:hidden;background:#303030;display:grid;place-items:center;font-size:22px}
-.profile-avatar img{width:100%;height:100%;object-fit:cover}
-.profile-name{font-size:17px;font-weight:700}
-.profile-sub{font-size:11px;color:#888;margin-top:5px}
-.stats-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
-.stat{padding:13px;background:#222;border:1px solid #333;border-radius:10px}
-.stat-value{font-size:19px;font-weight:700}
-.stat-label{font-size:10px;color:#888;margin-top:5px}
-.login-screen{
+.profile-top { display:flex;align-items:center;gap:15px; }
+.profile-avatar { width:65px;height:65px;border-radius:50%;overflow:hidden;background:#303030;display:grid;place-items:center;font-size:22px; }
+.profile-avatar img { width:100%;height:100%;object-fit:cover; }
+.profile-name { font-size:17px;font-weight:700; }
+.profile-sub { font-size:11px;color:#888;margin-top:5px; }
+.stats-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px; }
+.stat { padding:13px;background:#222;border:1px solid #333;border-radius:10px; }
+.stat-value { font-size:19px;font-weight:700; }
+.stat-label { font-size:10px;color:#888;margin-top:5px; }
+.login-screen {
   position:fixed;inset:0;background:#000b;backdrop-filter:blur(9px);
-  z-index:50;display:none;align-items:center;justify-content:center;padding:18px;
+  z-index:60;display:none;align-items:center;justify-content:center;padding:18px;
 }
-.login-screen.show{display:flex}
-.login-card{
-  width:100%;max-width:370px;background:#1b1b1b;
-  border:1px solid #383838;border-radius:18px;padding:23px;
-}
-.login-card h2{font-size:21px;margin:0 0 8px}
-.login-card p{font-size:12px;color:#999;line-height:1.6;margin:0 0 18px}
-.login-option{
+.login-screen.show { display:flex; }
+.login-card { width:100%;max-width:370px;background:#1b1b1b;border:1px solid #383838;border-radius:18px;padding:23px; }
+.login-card h2 { font-size:21px;margin:0 0 8px; }
+.login-card p { font-size:12px;color:#999;line-height:1.6;margin:0 0 18px; }
+.login-option {
   width:100%;display:flex;align-items:center;gap:12px;
   padding:13px;margin:9px 0;border:1px solid #3b3b3b;
-  background:#252525;color:white;border-radius:11px;text-align:left;
+  background:#252525;color:white;border-radius:11px;text-align:left;font-size:14px;
 }
-.login-option:hover{background:#303030}
-.login-icon{width:32px;height:32px;border-radius:9px;background:#383838;display:grid;place-items:center;font-size:16px}
-.login-note{font-size:10px;color:#777;line-height:1.5;margin-top:15px}
-.overlay{display:none;position:fixed;inset:0;background:#0008;z-index:15}
-@media(max-width:760px){
-  .sidebar{
+.login-option:hover { background:#303030; }
+.login-icon { width:34px;height:34px;border-radius:9px;background:#383838;display:grid;place-items:center;font-size:17px;font-weight:700; }
+.login-note { font-size:10px;color:#777;line-height:1.5;margin-top:15px; }
+.overlay { display:none;position:fixed;inset:0;background:#0008;z-index:25; }
+@media(max-width:760px) {
+  .sidebar {
     position:fixed;top:0;bottom:0;left:0;
     transform:translateX(-105%);width:min(290px,85vw);
     box-shadow:15px 0 45px #0007;
   }
-  .sidebar.open{transform:translateX(0)}
-  .overlay.show{display:block}
-  .topbar{padding:0 12px}
-  .chat-scroll{padding:18px 13px}
-  .composer-area{padding:9px 10px calc(10px + env(safe-area-inset-bottom))}
-  .message{max-width:94%;font-size:13px}
-  .welcome{padding-top:10vh}
-  .welcome h1{font-size:23px}
-  .section-scroll{padding:19px 13px}
+  .sidebar.open { transform:translateX(0); }
+  .overlay.show { display:block; }
+  .topbar { padding:0 11px; }
+  .chat-scroll { padding:17px 13px; }
+  .composer-area { padding:8px 10px 10px; }
+  .message { max-width:95%;font-size:13px; }
+  .welcome { padding-top:9vh; }
+  .welcome h1 { font-size:23px; }
+  .section-scroll { padding:18px 13px; }
 }
-@media(min-width:761px){
-  .sidebar.collapsed{width:0;padding:0;overflow:hidden;border:0}
+@media(min-width:761px) {
+  .sidebar.collapsed { width:0;padding:0;overflow:hidden;border:0; }
 }
 </style>
 </head>
@@ -286,23 +279,23 @@ textarea.field{resize:vertical;line-height:1.5}
 <div id="app">
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-top">
-      <div class="brand">
-        <div class="logo">G</div>
-        <div class="brand-name">Gubka-GPT</div>
-      </div>
-      <button class="icon-btn" id="collapseBtn" title="Свернуть меню">☰</button>
+      <div class="brand"><div class="logo">G</div><div class="brand-name">Gubka-GPT</div></div>
+      <button class="icon-btn" id="collapseBtn" aria-label="Закрыть меню">☰</button>
     </div>
 
     <button class="new-chat" id="newChatBtn">＋ Новый чат</button>
+    <button class="login-side" id="sideGithubLogin">
+      <span class="login-icon">GH</span><span>Войти через GitHub</span>
+    </button>
 
     <div class="side-label">История чатов</div>
     <div class="chat-list" id="chatList"></div>
 
     <div class="side-tools">
       <button class="side-link" data-view="terminal">⌘ <span>Терминал</span></button>
-      <button class="side-link" data-view="github">⌂ <span>GitHub</span></button>
+      <button class="side-link" data-view="github">⌂ <span>GitHub и репозитории</span></button>
       <button class="side-link" data-view="files">▤ <span>Файлы проекта</span></button>
-      <button class="side-link" data-view="changes">◇ <span>Изменения кода</span></button>
+      <button class="side-link" data-view="profile">◉ <span>Профиль</span></button>
     </div>
 
     <div class="account" id="accountButton">
@@ -319,7 +312,7 @@ textarea.field{resize:vertical;line-height:1.5}
 
   <main class="main">
     <header class="topbar">
-      <button class="icon-btn" id="menuBtn">☰</button>
+      <button class="icon-btn" id="menuBtn" aria-label="Меню">☰</button>
       <div class="top-title" id="topTitle">Новый чат</div>
       <div class="top-status"><span class="status-dot" id="statusDot"></span><span id="connectionStatus">Подключение</span></div>
     </header>
@@ -330,14 +323,14 @@ textarea.field{resize:vertical;line-height:1.5}
           <div class="welcome" id="welcome">
             <div class="welcome-mark">G</div>
             <h1>Чем займёмся сегодня?</h1>
-            <p>Gubka-GPT поможет с кодом, GitHub, поиском ошибок и идеями.</p>
+            <p>Помощник для кода, GitHub и разработки.</p>
           </div>
         </div>
       </div>
       <div class="composer-area">
         <div class="composer-wrap">
           <div class="composer">
-            <textarea id="messageInput" rows="1" placeholder="Напиши сообщение Gubka-GPT..."></textarea>
+            <textarea id="messageInput" rows="1" enterkeyhint="send" placeholder="Напиши сообщение Gubka-GPT..."></textarea>
             <button class="send-btn" id="sendBtn" title="Отправить">↑</button>
           </div>
           <div class="composer-note">Enter — отправить · Shift + Enter — новая строка</div>
@@ -350,17 +343,17 @@ textarea.field{resize:vertical;line-height:1.5}
         <div class="section-inner" style="height:100%;display:flex;flex-direction:column">
           <div class="section-heading">
             <h2>Терминал</h2>
-            <p>Консоль для просмотра выбранного GitHub-проекта и выполнения доступных операций.</p>
+            <p>Управление проектом через доступные команды Gubka-GPT.</p>
           </div>
           <div class="terminal">
             <div class="terminal-head"><span>GUBKA TERMINAL</span><button class="btn" id="terminalClear">Очистить</button></div>
             <div class="terminal-output" id="terminalOutput">
               <div class="term-line term-success">Gubka Terminal готов.</div>
-              <div class="term-line">Напиши <b>help</b>, чтобы посмотреть команды.</div>
+              <div class="term-line">Введи <b>help</b>, чтобы увидеть команды.</div>
             </div>
             <div class="terminal-input-row">
               <span class="terminal-prefix">gubka $</span>
-              <input id="terminalInput" autocomplete="off" spellcheck="false" placeholder="Введите команду...">
+              <input id="terminalInput" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" placeholder="Введите команду...">
             </div>
           </div>
         </div>
@@ -369,19 +362,28 @@ textarea.field{resize:vertical;line-height:1.5}
 
     <section class="workspace" id="view-github">
       <div class="section-scroll"><div class="section-inner">
-        <div class="section-heading"><h2>GitHub</h2><p>Подключение и управление репозиториями.</p></div>
+        <div class="section-heading"><h2>GitHub</h2><p>Авторизация и управление репозиториями.</p></div>
+        <div class="card">
+          <h3>Аккаунт GitHub</h3>
+          <div class="result" id="githubAccountStatus">Проверяем подключение...</div>
+          <div class="actions">
+            <button class="btn btn-blue" id="githubLoginMain">Войти через GitHub</button>
+            <button class="btn" id="loadReposBtn">Обновить список</button>
+          </div>
+        </div>
         <div class="card">
           <h3>Текущий репозиторий</h3>
           <div class="result" id="currentRepo">Загрузка...</div>
-          <div class="actions"><button class="btn" id="loadReposBtn">Обновить список</button></div>
-          <select class="field" id="repoSelect" style="margin-top:12px"><option value="">Выбери репозиторий</option></select>
+          <select class="field" id="repoSelect" style="margin-top:12px">
+            <option value="">Выбери репозиторий</option>
+          </select>
           <button class="btn btn-blue" id="selectRepoBtn">Выбрать репозиторий</button>
         </div>
         <div class="card">
           <h3>Создать репозиторий</h3>
           <input class="field" id="newRepoName" placeholder="Название репозитория">
-          <input class="field" id="newRepoDescription" placeholder="Описание (пока не поддерживается сервером)">
-          <label style="font-size:11px;color:#aaa"><input type="checkbox" id="newRepoPrivate" checked> Приватный репозиторий</label>
+          <input class="field" id="newRepoDescription" placeholder="Описание репозитория">
+          <label style="font-size:12px;color:#aaa"><input type="checkbox" id="newRepoPrivate" checked> Приватный репозиторий</label>
           <div class="actions"><button class="btn btn-blue" id="createRepoBtn">Создать</button></div>
           <div class="result" id="createRepoResult"></div>
         </div>
@@ -410,27 +412,6 @@ textarea.field{resize:vertical;line-height:1.5}
       </div></div>
     </section>
 
-    <section class="workspace" id="view-changes">
-      <div class="section-scroll"><div class="section-inner">
-        <div class="section-heading"><h2>Изменения кода</h2><p>ИИ подготовит полные файлы. Проверь результат перед отправкой в GitHub.</p></div>
-        <div class="card">
-          <h3>Задача для ИИ</h3>
-          <textarea class="field" id="changePrompt" rows="5" placeholder="Опиши, что нужно изменить в проекте..."></textarea>
-          <button class="btn btn-blue" id="prepareBtn">Подготовить изменения</button>
-          <div class="result" id="prepareResult"></div>
-        </div>
-        <div class="card">
-          <h3>Ожидающие изменения</h3>
-          <div class="result" id="pendingResult">Загружаем...</div>
-          <div class="actions">
-            <button class="btn" id="refreshPendingBtn">Обновить</button>
-            <button class="btn btn-blue" id="applyBtn">Применить в GitHub</button>
-            <button class="btn btn-danger" id="cancelBtn">Отменить</button>
-          </div>
-        </div>
-      </div></div>
-    </section>
-
     <section class="workspace" id="view-profile">
       <div class="section-scroll"><div class="section-inner">
         <div class="section-heading"><h2>Профиль</h2><p>Аккаунт и статистика использования.</p></div>
@@ -446,22 +427,18 @@ textarea.field{resize:vertical;line-height:1.5}
           <div class="result" id="profileInfo"></div>
         </div>
         <div class="card">
-          <h3>Общая статистика</h3>
+          <h3>Статистика на этом устройстве</h3>
           <div class="stats-grid">
-            <div class="stat"><div class="stat-value" id="requestCount">—</div><div class="stat-label">Запросы на этом устройстве</div></div>
-            <div class="stat"><div class="stat-value" id="tokenCount">Нет данных</div><div class="stat-label">Использованные токены</div></div>
-            <div class="stat"><div class="stat-value" id="timeCount">—</div><div class="stat-label">Время на сайте на этом устройстве</div></div>
-            <div class="stat"><div class="stat-value" id="chatCount">—</div><div class="stat-label">Создано чатов на этом устройстве</div></div>
+            <div class="stat"><div class="stat-value" id="requestCount">0</div><div class="stat-label">Запросов</div></div>
+            <div class="stat"><div class="stat-value" id="chatCount">0</div><div class="stat-label">Чатов</div></div>
+            <div class="stat"><div class="stat-value" id="timeCount">0 мин.</div><div class="stat-label">Время на сайте</div></div>
+            <div class="stat"><div class="stat-value" id="tokenCount">Нет данных</div><div class="stat-label">Токены — сервер не передаёт usage</div></div>
           </div>
-          <div class="result">Запросы, чаты и время считаются локально на этом устройстве. Сервер пока не сохраняет общую статистику между устройствами. Учёт токенов пока не подключён к OpenRouter usage.</div>
+          <div class="result" id="modelInfo"></div>
         </div>
         <div class="card">
-          <h3>Модель ИИ</h3>
-          <div class="result" id="modelInfo">Загрузка...</div>
-        </div>
-        <div class="card">
-          <h3>История текущего чата</h3>
-          <button class="btn btn-danger" id="clearHistoryBtn">Очистить историю чата</button>
+          <h3>История</h3>
+          <button class="btn btn-danger" id="clearHistoryBtn">Очистить историю текущего чата</button>
         </div>
       </div></div>
     </section>
@@ -470,451 +447,694 @@ textarea.field{resize:vertical;line-height:1.5}
 
 <div class="login-screen" id="loginScreen">
   <div class="login-card">
-    <div class="logo" style="margin-bottom:16px">G</div>
     <h2>Войти в Gubka-GPT</h2>
-    <p>Выбери способ авторизации. Через GitHub можно подключить свои репозитории.</p>
-    <button class="login-option" id="telegramLogin"><span class="login-icon">✈</span>Продолжить через Telegram</button>
-    <button class="login-option" id="githubLogin"><span class="login-icon">⌘</span>Продолжить через GitHub</button>
-    <div class="login-note">Не передавай никому пароли и токены доступа.</div>
-    <button class="btn" id="closeLogin" style="width:100%;margin-top:15px">Закрыть</button>
+    <p>Выбери способ авторизации, чтобы пользоваться функциями аккаунта.</p>
+    <button class="login-option" id="githubLogin">
+      <span class="login-icon">GH</span><span>Продолжить через GitHub</span>
+    </button>
+    <button class="login-option" id="telegramLogin">
+      <span class="login-icon">✈</span><span>Продолжить через Telegram</span>
+    </button>
+    <div class="login-note">Для доступа к GitHub-репозиториям потребуется авторизация GitHub.</div>
+    <button class="btn" id="closeLogin" style="width:100%;margin-top:14px">Закрыть</button>
   </div>
 </div>
 
 <script>
 "use strict";
 
-const tg = window.Telegram?.WebApp;
-if(tg){tg.ready();tg.expand();}
-
 const $ = id => document.getElementById(id);
+const tg = window.Telegram?.WebApp || null;
 const initData = tg?.initData || "";
-const STORAGE_KEY = "gubka_workspace_v3";
-const STATS_KEY = "gubka_stats_v1";
+if (tg) {
+  try { tg.ready(); tg.expand(); } catch(e) {}
+}
 
+const STORE_KEY = "gubka_chat_store_v4";
+const STATS_KEY = "gubka_stats_v4";
+const SESSION_KEY = "gubka_session_time_v4";
+
+function makeId() {
+  if (window.crypto?.randomUUID) return crypto.randomUUID().replaceAll("-","");
+  return "chat_" + Date.now().toString(36) + Math.random().toString(36).slice(2,10);
+}
+function safeId(id) {
+  return typeof id === "string" && /^[a-zA-Z0-9_-]{8,80}$/.test(id);
+}
+function loadStore() {
+  try {
+    const data = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
+    return {
+      chats: Array.isArray(data.chats) ? data.chats : [],
+      active: typeof data.active === "string" ? data.active : ""
+    };
+  } catch(e) { return {chats:[],active:""}; }
+}
+let chatStore = loadStore();
+let currentChatId = "";
 let currentUser = null;
 let currentModel = "";
-let currentChatId = "";
 let currentFileContent = "";
-let currentRepoName = "";
-let chatStore = loadStore();
-let requestCount = Number(localStorage.getItem(STATS_KEY+"_requests")||0);
+let requestCount = Number(localStorage.getItem(STATS_KEY+"_requests") || 0);
+let totalTime = Number(localStorage.getItem(STATS_KEY+"_time") || 0);
 let sessionStarted = Date.now();
-let totalTime = Number(localStorage.getItem(STATS_KEY+"_time")||0);
-let timerInterval = null;
+let currentRepoName = "";
 
-function loadStore(){
-  try{
-    const data=JSON.parse(localStorage.getItem(STORAGE_KEY)||"{}");
-    if(data.chats && Array.isArray(data.chats))return data;
-  }catch(e){}
-  return {chats:[],active:null};
+function saveStore() {
+  localStorage.setItem(STORE_KEY, JSON.stringify(chatStore));
 }
-function saveStore(){localStorage.setItem(STORAGE_KEY,JSON.stringify(chatStore));}
-function makeId(){return "c_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,9);}
-function createChat(){
-  const chat={id:makeId(),title:"Новый чат",created:Date.now()};
-  chatStore.chats.unshift(chat);
-  chatStore.active=chat.id;
+function activeChat() {
+  return chatStore.chats.find(c => c.id === currentChatId);
+}
+function createChat() {
+  const id = makeId();
+  chatStore.chats.unshift({id,title:"Новый чат"});
+  chatStore.active = id;
+  currentChatId = id;
   saveStore();
   renderChatList();
-  openChat(chat.id,true);
+  clearChatDisplay();
+  switchView("chat");
 }
-function activeChat(){return chatStore.chats.find(c=>c.id===currentChatId);}
-function authHeaders(){
-  const h={"Content-Type":"application/json"};
-  if(initData)h["X-Telegram-Init-Data"]=initData;
-  return h;
+function ensureChat() {
+  if (safeId(currentChatId) && activeChat()) return currentChatId;
+  createChat();
+  return currentChatId;
 }
-async function api(url,options={}){
-  const response=await fetch(url,{
-    credentials:"same-origin",
-    ...options,
-    headers:{...authHeaders(),...(options.headers||{})}
+
+async function api(path, options={}) {
+  const headers = new Headers(options.headers || {});
+  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type","application/json");
+  if (initData) headers.set("X-Telegram-Init-Data",initData);
+  const response = await fetch(path,{
+    ...options,headers,credentials:"same-origin"
   });
-  const raw=await response.text();
-  let data={};
-  try{data=raw?JSON.parse(raw):{};}catch(e){data={detail:raw,error:raw};}
-  if(!response.ok)throw new Error(data.error||data.detail||data.message||("HTTP "+response.status));
+  const raw = await response.text();
+  let data = {};
+  try { data = raw ? JSON.parse(raw) : {}; }
+  catch(e) { data = {message:raw}; }
+  if (!response.ok) throw new Error(data.error || data.detail || data.message || ("HTTP "+response.status));
   return data;
 }
-function setStatus(text,good=true){
-  $("connectionStatus").textContent=text;
-  $("statusDot").style.background=good?"#48bd83":"#d66a6a";
+
+function setStatus(text,good=true) {
+  $("connectionStatus").textContent = text;
+  $("statusDot").style.background = good ? "#48bd83" : "#d66a6a";
 }
-function showResult(el,msg,type=""){
-  el.textContent=msg;
-  el.className="result "+type;
+function showResult(el,msg,type="") {
+  el.textContent = String(msg ?? "");
+  el.className = "result " + type;
 }
-function escapeText(value){return String(value??"");}
-function closeSidebar(){
+function closeSidebar() {
   $("sidebar").classList.remove("open");
   $("overlay").classList.remove("show");
 }
-function toggleSidebar(){
-  if(innerWidth<=760){
+function toggleSidebar() {
+  if (window.innerWidth <= 760) {
     $("sidebar").classList.toggle("open");
     $("overlay").classList.toggle("show");
-  }else{
+  } else {
     $("sidebar").classList.toggle("collapsed");
   }
 }
-$("menuBtn").onclick=toggleSidebar;
-$("collapseBtn").onclick=toggleSidebar;
-$("overlay").onclick=closeSidebar;
+$("menuBtn").onclick = toggleSidebar;
+$("collapseBtn").onclick = toggleSidebar;
+$("overlay").onclick = closeSidebar;
 
-function switchView(name){
-  document.querySelectorAll(".workspace").forEach(x=>x.classList.remove("active"));
-  document.querySelectorAll(".side-link").forEach(x=>x.classList.toggle("active",x.dataset.view===name));
-  const target=$("view-"+name);
-  if(target)target.classList.add("active");
-  const titles={chat:activeChat()?.title||"Новый чат",terminal:"Терминал",github:"GitHub",files:"Файлы проекта",changes:"Изменения кода",profile:"Профиль"};
-  $("topTitle").textContent=titles[name]||"Gubka-GPT";
-  if(innerWidth<=760)closeSidebar();
-  if(name==="github")loadRepos();
-  if(name==="files")loadFiles();
-  if(name==="changes")loadPending();
+function switchView(name) {
+  document.querySelectorAll(".workspace").forEach(el=>el.classList.remove("active"));
+  document.querySelectorAll(".side-link").forEach(el=>el.classList.toggle("active",el.dataset.view===name));
+  const target = $("view-"+name);
+  if (target) target.classList.add("active");
+  const titles = {
+    chat:activeChat()?.title || "Новый чат",
+    terminal:"Терминал",github:"GitHub",files:"Файлы проекта",profile:"Профиль"
+  };
+  $("topTitle").textContent = titles[name] || "Gubka-GPT";
+  if (window.innerWidth <= 760) closeSidebar();
+  if (name === "github") loadRepos();
+  if (name === "files") loadFiles();
 }
-document.querySelectorAll(".side-link").forEach(b=>b.onclick=()=>switchView(b.dataset.view));
-$("accountButton").onclick=()=>switchView("profile");
+document.querySelectorAll(".side-link").forEach(btn=>{
+  btn.onclick = ()=>switchView(btn.dataset.view);
+});
+$("accountButton").onclick = ()=>switchView("profile");
 
-function renderChatList(){
-  const list=$("chatList");list.innerHTML="";
-  if(!chatStore.chats.length){
-    const empty=document.createElement("div");empty.className="empty-note";empty.textContent="Пока нет чатов";list.append(empty);return;
+function renderChatList() {
+  const list = $("chatList");
+  list.innerHTML = "";
+  if (!chatStore.chats.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-note";
+    empty.textContent = "Пока нет чатов";
+    list.append(empty);
+    return;
   }
   chatStore.chats.forEach(chat=>{
-    const row=document.createElement("div");row.className="chat-item"+(chat.id===currentChatId?" active":"");
-    const label=document.createElement("span");label.textContent="▤";label.style.color="#888";
-    const title=document.createElement("span");title.className="chat-title";title.textContent=chat.title||"Новый чат";
-    const del=document.createElement("button");del.className="chat-delete";del.textContent="×";del.title="Удалить чат";
-    del.onclick=async e=>{
+    const row = document.createElement("div");
+    row.className = "chat-item" + (chat.id===currentChatId ? " active" : "");
+    const icon = document.createElement("span");
+    icon.textContent = "▤";
+    icon.style.color = "#888";
+    const title = document.createElement("span");
+    title.className = "chat-title";
+    title.textContent = chat.title || "Новый чат";
+    const del = document.createElement("button");
+    del.className = "chat-delete";
+    del.textContent = "×";
+    del.title = "Удалить чат";
+    del.onclick = async e=>{
       e.stopPropagation();
-      if(!confirm("Удалить этот чат?"))return;
-      try{await api("/api/clear?chat_id="+encodeURIComponent(chat.id),{method:"POST",body:"{}"});}catch(e){}
-      chatStore.chats=chatStore.chats.filter(x=>x.id!==chat.id);
-      if(currentChatId===chat.id){currentChatId="";if(chatStore.chats.length)openChat(chatStore.chats[0].id);else createChat();}
-      saveStore();renderChatList();
+      if (!confirm("Удалить этот чат?")) return;
+      try {
+        await api("/api/clear?chat_id="+encodeURIComponent(chat.id),{method:"POST",body:"{}"});
+      } catch(e) {}
+      chatStore.chats = chatStore.chats.filter(x=>x.id!==chat.id);
+      if (currentChatId===chat.id) {
+        currentChatId = "";
+        if (chatStore.chats.length) openChat(chatStore.chats[0].id);
+        else createChat();
+      }
+      saveStore();
+      renderChatList();
     };
-    row.append(label,title,del);row.onclick=()=>openChat(chat.id);
+    row.append(icon,title,del);
+    row.onclick = ()=>openChat(chat.id);
     list.append(row);
   });
 }
-function clearChatDisplay(){
-  $("chatBox").innerHTML="";
-  const welcome=document.createElement("div");welcome.className="welcome";welcome.id="welcome";
-  welcome.innerHTML='<div class="welcome-mark">G</div><h1>Чем займёмся сегодня?</h1><p>Gubka-GPT поможет с кодом, GitHub, поиском ошибок и идеями.</p>';
+function clearChatDisplay() {
+  $("chatBox").innerHTML = "";
+  const welcome = document.createElement("div");
+  welcome.className = "welcome";
+  welcome.id = "welcome";
+  welcome.innerHTML = '<div class="welcome-mark">G</div><h1>Чем займёмся сегодня?</h1><p>Помощник для кода, GitHub и разработки.</p>';
   $("chatBox").append(welcome);
 }
-function openChat(id,skipHistory=false){
-  const chat=chatStore.chats.find(c=>c.id===id);if(!chat)return;
-  currentChatId=id;chatStore.active=id;saveStore();renderChatList();
-  $("topTitle").textContent=chat.title||"Новый чат";
+function openChat(id) {
+  const chat = chatStore.chats.find(c=>c.id===id);
+  if (!chat || !safeId(id)) return;
+  currentChatId = id;
+  chatStore.active = id;
+  saveStore();
+  renderChatList();
   switchView("chat");
   clearChatDisplay();
-  if(!skipHistory)loadHistory();
+  loadHistory();
 }
-$("newChatBtn").onclick=createChat;
+$("newChatBtn").onclick = createChat;
 
-function addMessage(role,text){
+function addMessage(role,text) {
   $("welcome")?.remove();
-  const row=document.createElement("div");row.className="message-row "+(role==="user"?"user":"assistant");
-  const message=document.createElement("div");message.className="message";
-  const label=document.createElement("div");label.className="message-label";label.textContent=role==="user"?"ВЫ":"GUBKA-GPT";
-  const content=document.createElement("div");content.className="message-content";content.textContent=text;
+  const row = document.createElement("div");
+  row.className = "message-row " + (role==="user" ? "user" : "assistant");
+  const message = document.createElement("div");
+  message.className = "message";
+  const label = document.createElement("div");
+  label.className = "message-label";
+  label.textContent = role==="user" ? "ВЫ" : "GUBKA-GPT";
+  const content = document.createElement("div");
+  content.className = "message-content";
+  content.textContent = String(text ?? "");
   message.append(label,content);
-  if(role!=="user"){
-    const actions=document.createElement("div");actions.className="message-actions";
-    const copy=document.createElement("button");copy.className="copy-btn";copy.textContent="Копировать";
-    copy.onclick=async()=>{
-      try{await navigator.clipboard.writeText(text);copy.textContent="Скопировано";setTimeout(()=>copy.textContent="Копировать",1300);}
-      catch(e){copy.textContent="Ошибка копирования";}
+  if (role !== "user") {
+    const actions = document.createElement("div");
+    actions.className = "message-actions";
+    const copy = document.createElement("button");
+    copy.className = "copy-btn";
+    copy.textContent = "Копировать";
+    copy.onclick = async ()=>{
+      try {
+        await navigator.clipboard.writeText(String(text));
+        copy.textContent = "Скопировано";
+      } catch(e) { copy.textContent = "Не удалось скопировать"; }
     };
-    actions.append(copy);message.append(actions);
+    actions.append(copy);
+    message.append(actions);
   }
-  row.append(message);$("chatBox").append(row);
-  $("chatScroll").scrollTop=$("chatScroll").scrollHeight;
+  row.append(message);
+  $("chatBox").append(row);
+  $("chatScroll").scrollTop = $("chatScroll").scrollHeight;
 }
-async function loadHistory(){
-  if(!currentChatId)return;
-  try{
-    const data=await api("/api/history?chat_id="+encodeURIComponent(currentChatId));
-    const messages=data.messages||data.history||[];
+async function loadHistory() {
+  if (!safeId(currentChatId)) return;
+  try {
+    const data = await api("/api/history?chat_id="+encodeURIComponent(currentChatId));
+    const messages = data.messages || data.history || [];
     clearChatDisplay();
-    if(!messages.length)return;
     messages.forEach(m=>addMessage(m.role==="user"?"user":"assistant",m.content||""));
-  }catch(e){console.warn("History:",e.message);}
-}
-async function sendMessage(){
-  const input=$("messageInput"),message=input.value.trim();
-  if(!message)return;
-  if(!currentChatId){createChat();}
-  const chat=activeChat();
-  if(chat&&chat.title==="Новый чат"){
-    chat.title=message.slice(0,38)+(message.length>38?"…":"");
-    $("topTitle").textContent=chat.title;saveStore();renderChatList();
+  } catch(e) {
+    console.warn("History:",e.message);
   }
-  input.value="";input.style.height="auto";
+}
+
+async function sendMessage() {
+  const input = $("messageInput");
+  const message = input.value.trim();
+  if (!message) return;
+  const chatId = ensureChat();
+
+  if (message.startsWith("/edit ")) {
+    input.value = "";
+    addMessage("user",message);
+    await prepareCode(message.slice(6).trim(),false);
+    return;
+  }
+  if (message === "/pending") {
+    input.value = "";
+    addMessage("user",message);
+    await showPendingInChat();
+    return;
+  }
+  if (message === "/apply") {
+    input.value = "";
+    addMessage("user",message);
+    await applyChanges(false);
+    return;
+  }
+  if (message === "/cancel") {
+    input.value = "";
+    addMessage("user",message);
+    await cancelChanges(false);
+    return;
+  }
+
+  const chat = activeChat();
+  if (chat && chat.title === "Новый чат") {
+    chat.title = message.slice(0,38)+(message.length>38?"…":"");
+    $("topTitle").textContent = chat.title;
+    saveStore();
+    renderChatList();
+  }
+  input.value = "";
+  input.style.height = "auto";
   addMessage("user",message);
-  $("sendBtn").disabled=true;
-  const loading=document.createElement("div");loading.className="typing";loading.textContent="Gubka-GPT думает...";
-  $("chatBox").append(loading);$("chatScroll").scrollTop=$("chatScroll").scrollHeight;
-  try{
-    const data=await api("/api/chat",{
+  $("sendBtn").disabled = true;
+  const loading = document.createElement("div");
+  loading.className = "typing";
+  loading.textContent = "Gubka-GPT думает...";
+  $("chatBox").append(loading);
+  $("chatScroll").scrollTop = $("chatScroll").scrollHeight;
+
+  try {
+    const data = await api("/api/chat",{
       method:"POST",
-      body:JSON.stringify({message,chat_id:currentChatId})
+      body:JSON.stringify({message,chat_id:chatId})
     });
     loading.remove();
-    addMessage("assistant",String(data.answer??"Сервер не вернул ответ."));
-    if(data.model){currentModel=data.model;$("modelInfo").textContent="Модель: "+data.model;}
-    requestCount++;localStorage.setItem(STATS_KEY+"_requests",String(requestCount));updateStats();
-  }catch(e){
-    loading.remove();addMessage("assistant","Не удалось получить ответ: "+e.message);
-  }finally{$("sendBtn").disabled=false;input.focus();}
+    addMessage("assistant",String(data.answer ?? "Сервер не вернул ответ."));
+    if (data.model) {
+      currentModel = data.model;
+      $("modelInfo").textContent = "Текущая модель: "+data.model;
+    }
+    requestCount++;
+    localStorage.setItem(STATS_KEY+"_requests",String(requestCount));
+    updateStats();
+  } catch(e) {
+    loading.remove();
+    addMessage("assistant","Не удалось получить ответ: "+e.message);
+  } finally {
+    $("sendBtn").disabled = false;
+  }
 }
-$("sendBtn").onclick=sendMessage;
+$("sendBtn").onclick = sendMessage;
 $("messageInput").addEventListener("keydown",e=>{
-  if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMessage();}
+  if (e.key==="Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
 });
-$("messageInput").addEventListener("input",function(){
-  this.style.height="auto";this.style.height=Math.min(this.scrollHeight,180)+"px";
+$("messageInput").addEventListener("input",function() {
+  this.style.height = "auto";
+  this.style.height = Math.min(this.scrollHeight,140)+"px";
 });
 
-async function loadMe(){
-  try{
-    const data=await api("/api/me");
-    currentUser=data.user||null;currentModel=data.model||"";
+async function loadMe() {
+  try {
+    const data = await api("/api/me");
+    currentUser = data.user || null;
+    currentModel = data.model || "";
     setStatus("Подключено");
-    const user=currentUser||{};
-    const name=user.first_name||user.login||"Пользователь";
-    const provider=user.provider||"Аккаунт";
-    $("sideUser").textContent=name;$("sideProvider").textContent=provider==="github"?"GitHub":"Telegram";
-    $("profileName").textContent=name;$("profileProvider").textContent="Вход через "+provider;
-    $("profileInfo").textContent="ID: "+(user.id||"не указан")+"\nЛогин: "+(user.login||"не указан");
-    $("modelInfo").textContent="Текущая модель: "+(data.model||"настроена на сервере");
-    $("currentRepo").textContent=data.repo||"Репозиторий пока не выбран.";
-    const photo=tg?.initDataUnsafe?.user?.photo_url||"";
+    const user = currentUser || {};
+    const name = user.first_name || user.login || "Пользователь";
+    const provider = String(user.provider || "Аккаунт").toLowerCase();
+    $("sideUser").textContent = name;
+    $("sideProvider").textContent = provider==="github" ? "GitHub" : "Telegram";
+    $("profileName").textContent = name;
+    $("profileProvider").textContent = "Вход через " + provider;
+    $("profileInfo").textContent = "ID: "+(user.id||"не указан")+"\nЛогин: "+(user.login||"не указан");
+    $("modelInfo").textContent = "Текущая модель: "+(data.model||"настроена на сервере");
+    $("currentRepo").textContent = data.repo || "Репозиторий пока не выбран.";
+    $("githubAccountStatus").textContent = provider==="github" ? "GitHub подключён." : "Вход выполнен через Telegram. Для GitHub-функций войди через GitHub.";
+    const photo = tg?.initDataUnsafe?.user?.photo_url || "";
     setAvatar(photo,name);
-    $("loginBtn").style.display="none";$("logoutBtn").style.display="inline-block";
+    $("loginBtn").style.display = "none";
+    $("logoutBtn").style.display = "inline-block";
+    $("sideGithubLogin").style.display = provider==="github" ? "none" : "flex";
+    $("githubLoginMain").style.display = provider==="github" ? "none" : "inline-block";
     return data;
-  }catch(e){
-    setStatus("Не авторизован",false);
-    $("sideUser").textContent="Гость";$("sideProvider").textContent="Нажми для входа";
-    $("profileName").textContent="Гость";$("profileProvider").textContent="Не авторизован";
-    $("profileInfo").textContent=e.message;
-    $("loginBtn").style.display="inline-block";$("logoutBtn").style.display="none";
+  } catch(e) {
+    setStatus("Нужен вход",false);
+    $("sideUser").textContent = "Гость";
+    $("sideProvider").textContent = "Нажми для входа";
+    $("profileName").textContent = "Гость";
+    $("profileProvider").textContent = "Не авторизован";
+    $("profileInfo").textContent = e.message;
+    $("githubAccountStatus").textContent = "Чтобы работать с GitHub, авторизуйся через GitHub.";
+    $("loginBtn").style.display = "inline-block";
+    $("logoutBtn").style.display = "none";
+    $("sideGithubLogin").style.display = "flex";
+    $("githubLoginMain").style.display = "inline-block";
     return null;
   }
 }
-function setAvatar(url,name){
-  const targets=[$("sideAvatar"),$("profileAvatar")];
-  targets.forEach(el=>{
-    el.innerHTML="";
-    if(url){const img=document.createElement("img");img.src=url;img.alt="Аватар";el.append(img);}
-    else el.textContent=(name||"G").slice(0,1).toUpperCase();
+function setAvatar(url,name) {
+  [$("sideAvatar"),$("profileAvatar")].forEach(el=>{
+    el.innerHTML = "";
+    if (url) {
+      const img = document.createElement("img");
+      img.src = url;
+      img.alt = "Аватар";
+      el.append(img);
+    } else {
+      el.textContent = (name||"G").slice(0,1).toUpperCase();
+    }
   });
 }
-async function loadRepos(){
-  const select=$("repoSelect");select.innerHTML='<option value="">Загрузка...</option>';
-  try{
-    const data=await api("/api/repos");
-    const repos=data.repositories||data.repos||[];
-    select.innerHTML='<option value="">Выбери репозиторий</option>';
-    repos.forEach(repo=>{
-      if(!repo.full_name)return;
-      const opt=document.createElement("option");opt.value=repo.full_name;
-      opt.textContent=repo.full_name+(repo.private?" 🔒":"");
-      opt.dataset.branch=repo.default_branch||"main";select.append(opt);
-    });
-    if(!repos.length)select.innerHTML='<option value="">Репозитории не найдены</option>';
-  }catch(e){select.innerHTML='<option value="">'+e.message+'</option>';}
+function startGithubLogin() {
+  window.location.href = "/auth/github";
 }
-$("loadReposBtn").onclick=loadRepos;
-$("selectRepoBtn").onclick=async()=>{
-  const repository=$("repoSelect").value;if(!repository)return;
-  const branch=$("repoSelect").selectedOptions[0]?.dataset.branch||"main";
-  try{
-    const data=await api("/api/select-repo",{method:"POST",body:JSON.stringify({repository,branch})});
-    showResult($("currentRepo"),"Выбран: "+(data.repository||repository)+" · "+(data.branch||branch),"success");
-    loadFiles();
-  }catch(e){showResult($("currentRepo"),e.message,"error");}
-};
-$("repoInfoBtn").onclick=async()=>{
-  try{const d=await api("/api/repo");showResult($("repoInfoResult"),JSON.stringify(d.info||d,null,2));}
-  catch(e){showResult($("repoInfoResult"),e.message,"error");}
-};
-$("createRepoBtn").onclick=async()=>{
-  const name=$("newRepoName").value.trim();if(!name){showResult($("createRepoResult"),"Введи название репозитория.","error");return;}
-  try{
-    const d=await api("/api/create-repo",{method:"POST",body:JSON.stringify({name,private:$("newRepoPrivate").checked})});
-    showResult($("createRepoResult"),"Создан: "+(d.name||name)+"\n"+(d.url||""),"success");loadRepos();
-  }catch(e){showResult($("createRepoResult"),e.message,"error");}
-};
-async function loadFiles(){
-  $("fileList").textContent="Загружаем...";
-  try{
-    const data=await api("/api/repo");
-    const files=data.files||[];const list=$("fileList");list.innerHTML="";
-    files.forEach(path=>{
-      const b=document.createElement("button");b.className="file-item";b.textContent=path;b.onclick=()=>readFile(path);list.append(b);
-    });
-    if(!files.length)list.textContent="Файлы не найдены.";
-  }catch(e){$("fileList").textContent=e.message;}
-}
-async function readFile(path){
-  $("selectedFileName").textContent="Загрузка: "+path;
-  try{
-    const d=await api("/api/read",{method:"POST",body:JSON.stringify({path})});
-    currentFileContent=d.content||"";$("selectedFileName").textContent=path;$("fileContent").textContent=currentFileContent;
-  }catch(e){$("fileContent").textContent=e.message;}
-}
-$("loadFilesBtn").onclick=loadFiles;
-$("copyFileBtn").onclick=async()=>{
-  if(!currentFileContent)return;
-  try{await navigator.clipboard.writeText(currentFileContent);$("copyFileBtn").textContent="Скопировано";setTimeout(()=>$("copyFileBtn").textContent="Скопировать содержимое",1300);}
-  catch(e){$("copyFileBtn").textContent="Не удалось скопировать";}
-};
-$("prepareBtn").onclick=async()=>{
-  const task=$("changePrompt").value.trim();if(!task){showResult($("prepareResult"),"Сначала опиши задачу.","error");return;}
-  $("prepareBtn").disabled=true;showResult($("prepareResult"),"ИИ готовит изменения...");
-  try{
-    const d=await api("/api/prepare",{method:"POST",body:JSON.stringify({task})});
-    showResult($("prepareResult"),d.summary||"Изменения подготовлены.","success");await loadPending();
-  }catch(e){showResult($("prepareResult"),e.message,"error");}
-  finally{$("prepareBtn").disabled=false;}
-};
-async function loadPending(){
-  try{
-    const d=await api("/api/pending");const p=d.pending;
-    if(!p){$("pendingResult").textContent="Нет ожидающих изменений.";return;}
-    $("pendingResult").textContent=(p.summary||"Изменения подготовлены")+"\n\nФайлы:\n"+(p.files||[]).join("\n")+"\n\nРепозиторий: "+(p.repository||"")+"\nВетка: "+(p.branch||"");
-  }catch(e){$("pendingResult").textContent=e.message;}
-}
-$("refreshPendingBtn").onclick=loadPending;
-$("applyBtn").onclick=async()=>{
-  if(!confirm("Отправить подготовленные изменения в GitHub?"))return;
-  $("applyBtn").disabled=true;
-  try{const d=await api("/api/apply",{method:"POST",body:"{}"});showResult($("pendingResult"),"Изменения отправлены.\n"+(d.url||""),"success");}
-  catch(e){showResult($("pendingResult"),e.message,"error");}
-  finally{$("applyBtn").disabled=false;}
-};
-$("cancelBtn").onclick=async()=>{
-  try{await api("/api/cancel",{method:"POST",body:"{}"});showResult($("pendingResult"),"Ожидающие изменения отменены.","success");}
-  catch(e){showResult($("pendingResult"),e.message,"error");}
-};
-$("clearHistoryBtn").onclick=async()=>{
-  if(!confirm("Очистить историю текущего чата?"))return;
-  try{
-    await api("/api/clear?chat_id="+encodeURIComponent(currentChatId),{method:"POST",body:"{}"});
-    clearChatDisplay();addMessage("assistant","История очищена. Можем начать заново.");
-  }catch(e){alert(e.message);}
-};
-
-function termWrite(text,cls=""){
-  const line=document.createElement("div");line.className="term-line "+cls;line.textContent=text;
-  $("terminalOutput").append(line);$("terminalOutput").scrollTop=$("terminalOutput").scrollHeight;
-}
-function termPrompt(command){termWrite("gubka $ "+command,"term-prompt");}
-function currentRepoPath(){return currentRepoName||$("currentRepo").textContent||"Не выбран";}
-async function runTerminal(raw){
-  const input=raw.trim();if(!input)return;
-  termPrompt(input);
-  const parts=input.match(/"[^"]*"|'[^']*'|\S+/g)||[];
-  const cmd=(parts.shift()||"").toLowerCase();
-  const arg=parts.join(" ").replace(/^["']|["']$/g,"");
-  try{
-    if(cmd==="help"){
-      termWrite("Доступные команды:");
-      termWrite("help             — список команд");
-      termWrite("clear            — очистить консоль");
-      termWrite("pwd              — текущий репозиторий и ветка");
-      termWrite("whoami           — текущий аккаунт");
-      termWrite("model            — текущая модель ИИ");
-      termWrite("repo             — информация о репозитории");
-      termWrite("ls               — список файлов");
-      termWrite("tree             — дерево файлов");
-      termWrite("cat <путь>       — прочитать файл");
-      termWrite("find <слово>     — поиск по именам файлов");
-      termWrite("git status       — статус репозитория");
-      termWrite("git log          — последний коммит");
-      termWrite("ask <вопрос>     — задать вопрос Gubka-GPT");
-      termWrite("Терминал работает с GitHub API. Произвольные команды ОС не исполняются.");
-    }else if(cmd==="clear"){
-      $("terminalOutput").innerHTML="";
-    }else if(cmd==="pwd"){
-      const d=await api("/api/me");
-      const repo=d.repo||"репозиторий не выбран";
-      termWrite(repo+" · "+(d.branch||"ветка по умолчанию"));
-    }else if(cmd==="whoami"){
-      const d=await api("/api/me");const u=d.user||{};
-      termWrite((u.first_name||u.login||"Пользователь")+" · "+(u.provider||"unknown")+" · ID "+(u.id||"?"));
-    }else if(cmd==="model"){
-      const d=await api("/api/me");termWrite("Модель: "+(d.model||"не указана"));
-    }else if(cmd==="repo"||(cmd==="git"&&parts[0]==="status")){
-      const d=await api("/api/repo");termWrite(JSON.stringify(d.info||d,null,2));
-    }else if(cmd==="ls"||cmd==="tree"){
-      const d=await api("/api/repo");const files=d.files||[];
-      termWrite(files.length?files.join("\n"):"Файлы не найдены.");
-      if(d.truncated)termWrite("GitHub сообщил, что дерево файлов обрезано.");
-    }else if(cmd==="cat"){
-      if(!arg){termWrite("Использование: cat main.py","term-error");return;}
-      const d=await api("/api/read",{method:"POST",body:JSON.stringify({path:arg})});
-      termWrite(d.content||"(пустой файл)");
-    }else if(cmd==="find"){
-      if(!arg){termWrite("Использование: find слово","term-error");return;}
-      const d=await api("/api/repo");const found=(d.files||[]).filter(x=>x.toLowerCase().includes(arg.toLowerCase()));
-      termWrite(found.length?found.join("\n"):"Совпадений по именам файлов нет.");
-    }else if(cmd==="git"&&parts[0]==="log"){
-      const d=await api("/api/repo");const i=d.info||{};
-      termWrite("Последний коммит: "+(i.last_commit||"неизвестно")+"\n"+(i.commit_message||""));
-    }else if(cmd==="ask"){
-      if(!arg){termWrite("Использование: ask твой вопрос","term-error");return;}
-      const d=await api("/api/chat",{method:"POST",body:JSON.stringify({message:arg,chat_id:currentChatId||"terminal"})});
-      termWrite(d.answer||"Пустой ответ.","term-success");
-    }else{
-      termWrite("Неизвестная команда. Введи help.","term-error");
-    }
-  }catch(e){termWrite("Ошибка: "+e.message,"term-error");}
-}
-$("terminalInput").addEventListener("keydown",e=>{
-  if(e.key==="Enter"){
-    const v=e.target.value;e.target.value="";runTerminal(v);
+$("sideGithubLogin").onclick = startGithubLogin;
+$("githubLoginMain").onclick = startGithubLogin;
+$("loginBtn").onclick = ()=>$("loginScreen").classList.add("show");
+$("githubLogin").onclick = startGithubLogin;
+$("closeLogin").onclick = ()=>$("loginScreen").classList.remove("show");
+$("telegramLogin").onclick = ()=>{
+  if (tg && initData) {
+    $("loginScreen").classList.remove("show");
+    loadMe();
+  } else {
+    window.location.href = "https://t.me/gubkagpt_bot";
   }
-});
-$("terminalClear").onclick=()=>$("terminalOutput").innerHTML="";
-
-$("loginBtn").onclick=()=>$("loginScreen").classList.add("show");
-$("closeLogin").onclick=()=>$("loginScreen").classList.remove("show");
-$("githubLogin").onclick=()=>location.href="/auth/github";
-$("telegramLogin").onclick=()=>{
-  if(tg&&initData){$("loginScreen").classList.remove("show");loadMe();}
-  else location.href="https://t.me/gubkagpt_bot";
 };
-$("logoutBtn").onclick=async()=>{
-  try{await fetch("/auth/logout",{method:"POST",credentials:"same-origin"});}catch(e){}
+$("logoutBtn").onclick = async ()=>{
+  try { await fetch("/auth/logout",{method:"POST",credentials:"same-origin"}); }
+  catch(e) {}
   location.reload();
 };
 
-function updateStats(){
-  $("requestCount").textContent=requestCount;
-  $("chatCount").textContent=chatStore.chats.length;
-  const seconds=Math.floor((totalTime+Date.now()-sessionStarted)/1000);
-  const mins=Math.floor(seconds/60);
-  $("timeCount").textContent=mins<60?mins+" мин.":Math.floor(mins/60)+" ч. "+(mins%60)+" мин.";
-  $("tokenCount").textContent="Нет данных";
+async function loadRepos() {
+  const select = $("repoSelect");
+  select.innerHTML = '<option value="">Загрузка...</option>';
+  try {
+    const data = await api("/api/repos");
+    const repos = data.repositories || data.repos || [];
+    select.innerHTML = '<option value="">Выбери репозиторий</option>';
+    repos.forEach(repo=>{
+      if (!repo.full_name) return;
+      const opt = document.createElement("option");
+      opt.value = repo.full_name;
+      opt.textContent = repo.full_name+(repo.private?" · private":"");
+      opt.dataset.branch = repo.default_branch || "main";
+      select.append(opt);
+    });
+    if (!repos.length) select.innerHTML = '<option value="">Репозитории не найдены</option>';
+  } catch(e) {
+    select.innerHTML = '<option value="">'+e.message.replaceAll("<","&lt;")+'</option>';
+  }
 }
-timerInterval=setInterval(()=>{
-  totalTime+=0;
+$("loadReposBtn").onclick = loadRepos;
+$("selectRepoBtn").onclick = async ()=>{
+  const repo = $("repoSelect").value;
+  if (!repo) return;
+  const branch = $("repoSelect").selectedOptions[0]?.dataset.branch || "main";
+  try {
+    const data = await api("/api/select-repo",{
+      method:"POST",
+      body:JSON.stringify({repo,branch})
+    });
+    showResult($("currentRepo"),"Выбран: "+(data.repository||repo)+" · "+(data.branch||branch),"success");
+    currentRepoName = repo;
+    loadFiles();
+  } catch(e) {
+    showResult($("currentRepo"),e.message,"error");
+  }
+};
+$("repoInfoBtn").onclick = async ()=>{
+  try {
+    const data = await api("/api/repo");
+    showResult($("repoInfoResult"),JSON.stringify(data.info||data,null,2));
+  } catch(e) { showResult($("repoInfoResult"),e.message,"error"); }
+};
+$("createRepoBtn").onclick = async ()=>{
+  const name = $("newRepoName").value.trim();
+  if (!name) {
+    showResult($("createRepoResult"),"Введи название репозитория.","error");
+    return;
+  }
+  try {
+    const data = await api("/api/create-repo",{
+      method:"POST",
+      body:JSON.stringify({
+        name,
+        description:$("newRepoDescription").value.trim(),
+        private:$("newRepoPrivate").checked
+      })
+    });
+    showResult($("createRepoResult"),"Создан: "+(data.name||name)+"\n"+(data.url||""),"success");
+    loadRepos();
+  } catch(e) { showResult($("createRepoResult"),e.message,"error"); }
+};
+
+async function loadFiles() {
+  $("fileList").textContent = "Загружаем...";
+  try {
+    const data = await api("/api/repo");
+    const files = data.files || [];
+    const list = $("fileList");
+    list.innerHTML = "";
+    files.forEach(item=>{
+      const path = typeof item==="string" ? item : item.path;
+      if (!path) return;
+      const btn = document.createElement("button");
+      btn.className = "file-item";
+      btn.textContent = path;
+      btn.onclick = ()=>readFile(path);
+      list.append(btn);
+    });
+    if (!list.children.length) list.textContent = "Файлы не найдены.";
+  } catch(e) { $("fileList").textContent = e.message; }
+}
+async function readFile(path) {
+  $("selectedFileName").textContent = "Загрузка: "+path;
+  try {
+    const data = await api("/api/read",{
+      method:"POST",body:JSON.stringify({path})
+    });
+    currentFileContent = data.content || "";
+    $("selectedFileName").textContent = path;
+    $("fileContent").textContent = currentFileContent;
+  } catch(e) { $("fileContent").textContent = e.message; }
+}
+$("loadFilesBtn").onclick = loadFiles;
+$("copyFileBtn").onclick = async ()=>{
+  if (!currentFileContent) return;
+  try {
+    await navigator.clipboard.writeText(currentFileContent);
+    $("copyFileBtn").textContent = "Скопировано";
+  } catch(e) { $("copyFileBtn").textContent = "Не удалось скопировать"; }
+};
+
+async function prepareCode(task,showInChat=true) {
+  if (!task) {
+    if (showInChat) addMessage("assistant","Напиши задачу после команды /edit.");
+    return;
+  }
+  if (showInChat) addMessage("assistant","Готовлю изменения для GitHub...");
+  try {
+    const data = await api("/api/prepare",{
+      method:"POST",
+      body:JSON.stringify({prompt:task,request:task})
+    });
+    const summary = data.summary || data.message || "Изменения подготовлены.";
+    if (showInChat) {
+      addMessage("assistant",summary+"\n\nПроверь результат командой /pending. Чтобы отправить изменения в GitHub, используй /apply. Чтобы отменить — /cancel.");
+    }
+    termWrite("Изменения подготовлены: "+summary,"term-success");
+    await loadPending();
+  } catch(e) {
+    if (showInChat) addMessage("assistant","Не удалось подготовить изменения: "+e.message);
+    termWrite("Ошибка подготовки: "+e.message,"term-error");
+  }
+}
+async function getPendingText() {
+  const data = await api("/api/pending");
+  const p = data.pending;
+  if (!p) return "Нет ожидающих изменений.";
+  const files = Array.isArray(p.files) ? p.files.map(x=>typeof x==="string"?x:(x.path||JSON.stringify(x))).join("\n") : "Список файлов не передан.";
+  return (p.summary||"Изменения подготовлены")+"\n\nФайлы:\n"+files+"\n\nРепозиторий: "+(p.repository||"не указан")+"\nВетка: "+(p.branch||"не указана");
+}
+async function loadPending() {
+  try {
+    const text = await getPendingText();
+    $("githubAccountStatus").dataset.pending = text;
+  } catch(e) {}
+}
+async function showPendingInChat() {
+  try { addMessage("assistant",await getPendingText()); }
+  catch(e) { addMessage("assistant","Не удалось получить ожидающие изменения: "+e.message); }
+}
+async function applyChanges(showInChat=true) {
+  if (!confirm("Отправить подготовленные изменения в GitHub?")) return;
+  try {
+    const data = await api("/api/apply",{method:"POST",body:"{}"});
+    const msg = "Изменения отправлены в GitHub.\n"+(data.url||"");
+    if (showInChat) addMessage("assistant",msg);
+    termWrite(msg,"term-success");
+  } catch(e) {
+    if (showInChat) addMessage("assistant","Ошибка применения: "+e.message);
+    termWrite("Ошибка применения: "+e.message,"term-error");
+  }
+}
+async function cancelChanges(showInChat=true) {
+  try {
+    await api("/api/cancel",{method:"POST",body:"{}"});
+    if (showInChat) addMessage("assistant","Ожидающие изменения отменены.");
+    termWrite("Ожидающие изменения отменены.","term-success");
+  } catch(e) {
+    if (showInChat) addMessage("assistant","Ошибка отмены: "+e.message);
+    termWrite("Ошибка отмены: "+e.message,"term-error");
+  }
+}
+$("clearHistoryBtn").onclick = async ()=>{
+  if (!safeId(currentChatId)) return;
+  if (!confirm("Очистить историю текущего чата?")) return;
+  try {
+    await api("/api/clear?chat_id="+encodeURIComponent(currentChatId),{
+      method:"POST",body:"{}"
+    });
+    clearChatDisplay();
+    addMessage("assistant","История очищена. Можем начать заново.");
+  } catch(e) { alert(e.message); }
+};
+
+function termWrite(text,cls="") {
+  const line = document.createElement("div");
+  line.className = "term-line "+cls;
+  line.textContent = String(text ?? "");
+  $("terminalOutput").append(line);
+  $("terminalOutput").scrollTop = $("terminalOutput").scrollHeight;
+}
+function termPrompt(command) { termWrite("gubka $ "+command,"term-prompt"); }
+
+async function runTerminal(raw) {
+  const input = raw.trim();
+  if (!input) return;
+  termPrompt(input);
+  const parts = input.match(/"[^"]*"|'[^']*'|\S+/g) || [];
+  const cmd = (parts.shift() || "").toLowerCase();
+  const arg = parts.join(" ").replace(/^["']|["']$/g,"");
+  try {
+    if (cmd==="help") {
+      termWrite("Команды терминала:");
+      termWrite("help                 — список команд");
+      termWrite("clear                — очистить консоль");
+      termWrite("whoami               — текущий аккаунт");
+      termWrite("model                — модель ИИ");
+      termWrite("repo                 — выбранный репозиторий");
+      termWrite("ls                   — список файлов проекта");
+      termWrite("cat <путь>           — прочитать файл");
+      termWrite("find <слово>         — найти файл по имени");
+      termWrite("ask <вопрос>         — спросить Gubka-GPT");
+      termWrite("edit <задача>        — подготовить изменения кода");
+      termWrite("pending              — посмотреть ожидающие изменения");
+      termWrite("apply                — отправить изменения в GitHub");
+      termWrite("cancel               — отменить изменения");
+      termWrite("Это консоль команд приложения, не shell операционной системы.");
+    } else if (cmd==="clear") {
+      $("terminalOutput").innerHTML = "";
+    } else if (cmd==="whoami") {
+      const d = await api("/api/me");
+      const u = d.user || {};
+      termWrite((u.first_name||u.login||"Пользователь")+" · "+(u.provider||"unknown")+" · ID "+(u.id||"?"));
+    } else if (cmd==="model") {
+      const d = await api("/api/me");
+      termWrite("Модель: "+(d.model||"не указана"));
+    } else if (cmd==="repo" || cmd==="pwd") {
+      const d = await api("/api/me");
+      termWrite("Репозиторий: "+(d.repo||"не выбран"));
+    } else if (cmd==="ls" || cmd==="tree") {
+      const d = await api("/api/repo");
+      const files = (d.files||[]).map(x=>typeof x==="string"?x:x.path).filter(Boolean);
+      termWrite(files.length?files.join("\n"):"Файлы не найдены.");
+    } else if (cmd==="cat") {
+      if (!arg) { termWrite("Использование: cat main.py","term-error"); return; }
+      const d = await api("/api/read",{method:"POST",body:JSON.stringify({path:arg})});
+      termWrite(d.content||"(пустой файл)");
+    } else if (cmd==="find") {
+      if (!arg) { termWrite("Использование: find слово","term-error"); return; }
+      const d = await api("/api/repo");
+      const files = (d.files||[]).map(x=>typeof x==="string"?x:x.path).filter(Boolean);
+      const found = files.filter(x=>x.toLowerCase().includes(arg.toLowerCase()));
+      termWrite(found.length?found.join("\n"):"Совпадений нет.");
+    } else if (cmd==="ask") {
+      if (!arg) { termWrite("Использование: ask твой вопрос","term-error"); return; }
+      const chatId = ensureChat();
+      const d = await api("/api/chat",{
+        method:"POST",body:JSON.stringify({message:arg,chat_id:chatId})
+      });
+      termWrite(d.answer||"Пустой ответ.","term-success");
+    } else if (cmd==="edit") {
+      if (!arg) { termWrite("Использование: edit опиши нужные изменения","term-error"); return; }
+      await prepareCode(arg,false);
+    } else if (cmd==="pending") {
+      termWrite(await getPendingText());
+    } else if (cmd==="apply") {
+      await applyChanges(false);
+    } else if (cmd==="cancel") {
+      await cancelChanges(false);
+    } else {
+      termWrite("Неизвестная команда. Введи help.","term-error");
+    }
+  } catch(e) {
+    termWrite("Ошибка: "+e.message,"term-error");
+  }
+}
+$("terminalInput").addEventListener("keydown",e=>{
+  if (e.key==="Enter") {
+    e.preventDefault();
+    const value = e.target.value;
+    e.target.value = "";
+    runTerminal(value);
+  }
+});
+$("terminalClear").onclick = ()=>$("terminalOutput").innerHTML="";
+
+function updateStats() {
+  $("requestCount").textContent = String(requestCount);
+  $("chatCount").textContent = String(chatStore.chats.length);
+  const seconds = Math.floor((totalTime+Date.now()-sessionStarted)/1000);
+  const mins = Math.floor(seconds/60);
+  $("timeCount").textContent = mins<60 ? mins+" мин." : Math.floor(mins/60)+" ч. "+(mins%60)+" мин.";
+  $("tokenCount").textContent = "Нет данных";
+}
+setInterval(()=>{
   localStorage.setItem(STATS_KEY+"_time",String(totalTime+Date.now()-sessionStarted));
   updateStats();
 },10000);
 
-async function startApp(){
+async function startApp() {
   renderChatList();
-  if(!chatStore.chats.length)createChat();
-  else openChat(chatStore.active&&chatStore.chats.some(c=>c.id===chatStore.active)?chatStore.active:chatStore.chats[0].id);
+  const validChats = chatStore.chats.filter(c=>safeId(c.id));
+  chatStore.chats = validChats;
+  if (!chatStore.chats.length) {
+    createChat();
+  } else {
+    const selected = chatStore.chats.find(c=>c.id===chatStore.active) || chatStore.chats[0];
+    openChat(selected.id);
+  }
   await loadMe();
   updateStats();
-  loadPending();
 }
 startApp();
 </script>
