@@ -2,7 +2,6 @@
 import os
 import asyncio
 import base64
-import json
 import re
 from urllib.parse import quote
 
@@ -10,6 +9,7 @@ from aiohttp import web, ClientSession, ClientTimeout
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
+
 
 # =========================
 # НАСТРОЙКИ
@@ -24,26 +24,14 @@ GITHUB_REPO = os.getenv("GITHUB_REPO", "Deadruke/gubka-gpt.")
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 
-if not all([
-    TELEGRAM_TOKEN,
-    OPENROUTER_KEY,
-    GITHUB_TOKEN,
-    ALLOWED_USER_ID
-]):
-    raise RuntimeError(
-        "Не настроены обязательные Environment Variables"
-    )
+if not all([TELEGRAM_TOKEN, OPENROUTER_KEY, GITHUB_TOKEN, ALLOWED_USER_ID]):
+    raise RuntimeError("Не настроены обязательные Environment Variables")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# Подготовленные, но ещё не сохранённые изменения
 pending_changes = {}
-
-# История обычного чата
 chat_history = {}
-
-# Защита от одновременных запросов
 user_locks = {}
 
 
@@ -68,16 +56,10 @@ def safe_path(path):
     path = path.strip().strip("/")
     parts = path.split("/")
 
-    if not path or any(
-        part in ("", ".", "..") for part in parts
-    ):
+    if not path or any(part in ("", ".", "..") for part in parts):
         raise ValueError("Некорректный путь")
 
-    forbidden = (
-        ".env",
-        ".git",
-        "__pycache__"
-    )
+    forbidden = (".env", ".git", "__pycache__")
 
     if any(
         path == item or path.startswith(item + "/")
@@ -127,11 +109,7 @@ async def github_request(method, path="", payload=None):
             result = await response.json(content_type=None)
 
             if response.status >= 400:
-                error = result.get(
-                    "message",
-                    "Неизвестная ошибка"
-                )
-
+                error = result.get("message", "Неизвестная ошибка")
                 raise RuntimeError(
                     f"GitHub API ({response.status}): {error}"
                 )
@@ -142,10 +120,7 @@ async def github_request(method, path="", payload=None):
 async def read_github_file(path):
     path = safe_path(path)
 
-    result = await github_request(
-        "GET",
-        f"contents/{path}"
-    )
+    result = await github_request("GET", f"contents/{path}")
 
     if result.get("type") != "file":
         raise RuntimeError("Это не файл")
@@ -184,16 +159,11 @@ async def get_project_context():
 
         try:
             content, _ = await read_github_file(name)
-
             context.append(
-                f"\n===== ФАЙЛ: {name} =====\n"
-                f"{content[:16000]}"
+                f"\n===== ФАЙЛ: {name} =====\n{content[:16000]}"
             )
-
         except Exception as error:
-            context.append(
-                f"\nНе удалось прочитать {name}: {error}"
-            )
+            context.append(f"\nНе удалось прочитать {name}: {error}")
 
     if not context:
         raise RuntimeError("Файлы проекта не найдены")
@@ -215,23 +185,18 @@ async def save_file(path, content):
     try:
         _, sha = await read_github_file(path)
         payload["sha"] = sha
-
     except RuntimeError as error:
         if "404" not in str(error):
             raise
 
-    return await github_request(
-        "PUT",
-        f"contents/{path}",
-        payload
-    )
+    return await github_request("PUT", f"contents/{path}", payload)
 
 
 # =========================
 # OPENROUTER / ИИ
 # =========================
 
-async def ask_ai(system_prompt, user_prompt):
+async def ask_ai(system_prompt, user_prompt, max_tokens=14000):
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
         "Content-Type": "application/json"
@@ -240,19 +205,13 @@ async def ask_ai(system_prompt, user_prompt):
     data = {
         "model": MODEL,
         "messages": [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_prompt
-            }
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ],
-        "max_tokens": 10000
+        "max_tokens": max_tokens
     }
 
-    timeout = ClientTimeout(total=120)
+    timeout = ClientTimeout(total=180)
 
     async with ClientSession(timeout=timeout) as session:
         async with session.post(
@@ -261,9 +220,7 @@ async def ask_ai(system_prompt, user_prompt):
             json=data
         ) as response:
 
-            result = await response.json(
-                content_type=None
-            )
+            result = await response.json(content_type=None)
 
             if response.status != 200:
                 raise RuntimeError(
@@ -295,11 +252,10 @@ CHAT_SYSTEM = """
 Отвечай естественно, понятно и по делу.
 Помогай с вопросами, идеями, обучением и программированием.
 
-ВАЖНО:
 Обычный чат — это только разговор.
 Не пытайся менять файлы GitHub.
-Не утверждай, что ты выполнил действия, которые не выполнял.
-Если пользователь хочет изменить проект, предложи использовать команду /code.
+Не утверждай, что выполнил действия, которых не выполнял.
+Если пользователь хочет изменить проект, предложи использовать /code.
 """
 
 
@@ -307,18 +263,11 @@ async def chat_with_ai(user_id, text):
     history = chat_history.setdefault(user_id, [])
 
     messages = [
-        {
-            "role": "system",
-            "content": CHAT_SYSTEM
-        }
+        {"role": "system", "content": CHAT_SYSTEM}
     ]
 
     messages.extend(history[-10:])
-
-    messages.append({
-        "role": "user",
-        "content": text
-    })
+    messages.append({"role": "user", "content": text})
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
@@ -340,9 +289,7 @@ async def chat_with_ai(user_id, text):
             json=data
         ) as response:
 
-            result = await response.json(
-                content_type=None
-            )
+            result = await response.json(content_type=None)
 
             if response.status != 200:
                 raise RuntimeError(
@@ -360,15 +307,8 @@ async def chat_with_ai(user_id, text):
             if not isinstance(answer, str) or not answer.strip():
                 raise RuntimeError("Получен пустой ответ")
 
-    history.append({
-        "role": "user",
-        "content": text
-    })
-
-    history.append({
-        "role": "assistant",
-        "content": answer
-    })
+    history.append({"role": "user", "content": text})
+    history.append({"role": "assistant", "content": answer})
 
     chat_history[user_id] = history[-20:]
 
@@ -379,17 +319,17 @@ async def chat_with_ai(user_id, text):
 # ИИ-РАЗРАБОТЧИК
 # =========================
 
-CODE_SYSTEM = """
+CODE_SYSTEM = r"""
 Ты — Губка GPT, ИИ-разработчик существующего Python-проекта.
 
 Тебе переданы задача пользователя и текущие файлы проекта.
 
-ТВОЯ ГЛАВНАЯ ЦЕЛЬ:
+ГЛАВНАЯ ЦЕЛЬ:
 Выполнить именно задачу пользователя.
 Не подменяй её другими улучшениями.
 
 ПРАВИЛА:
-1. Сначала внимательно изучи текущий код.
+1. Внимательно изучи текущий код.
 2. Не меняй функции, не связанные с задачей.
 3. Сохраняй существующие возможности проекта.
 4. Возвращай полный новый текст каждого изменяемого файла.
@@ -400,52 +340,113 @@ CODE_SYSTEM = """
 9. Не изменяй .env, .git и секретные файлы.
 10. Не удаляй файлы.
 11. Не более пяти изменяемых файлов.
-12. Если задача уже выполнена, верни пустой files.
-13. Если не хватает информации, объясни это в summary и верни пустой files.
-14. Не добавляй приветствия и другие несвязанные функции.
-15. Если задача касается команды Telegram, проверь совместимость с существующей архитектурой aiogram.
+12. Если задача уже выполнена, верни пустой список файлов.
+13. Если информации недостаточно, объясни это в описании и не меняй файлы.
+14. Не добавляй приветствия и несвязанные функции.
+15. Для Telegram-команд учитывай существующую архитектуру aiogram.
 
-Верни только JSON такого формата:
+ВАЖНО: НЕ ИСПОЛЬЗУЙ JSON.
 
-{
-  "summary": "Кратко и точно, что сделано для задачи пользователя",
-  "files": [
-    {
-      "path": "main.py",
-      "content": "Полный текст нового файла"
-    }
-  ]
-}
+Верни ответ строго в следующем формате:
 
-Никакого Markdown вокруг JSON.
+<<<GUBKA_SUMMARY>>>
+Краткое описание изменений
+
+<<<GUBKA_FILE: main.py>>>
+Здесь полный исходный код файла без Markdown-ограждений.
+<<<GUBKA_END_FILE>>>
+
+Для нескольких файлов повторяй блок GUBKA_FILE.
+
+Если изменений нет, верни только блок GUBKA_SUMMARY с объяснением.
+
+Не используй эти специальные маркеры внутри содержимого файлов.
+Не добавляй текст до первого маркера или после последнего.
+Не обрезай файлы.
 """
 
 
-def extract_json(answer):
+SUMMARY_MARKER = "<<<GUBKA_SUMMARY>>>"
+FILE_PATTERN = re.compile(
+    r"(?m)^<<<GUBKA_FILE:\s*(.*?)>>>[ \t]*\r?$"
+)
+END_MARKER = "<<<GUBKA_END_FILE>>>"
+
+
+def extract_model_files(answer):
     answer = answer.strip()
 
-    answer = re.sub(
-        r"^```(?:json)?\s*",
-        "",
-        answer
-    )
+    summary_position = answer.find(SUMMARY_MARKER)
 
-    answer = re.sub(
-        r"\s*```$",
-        "",
-        answer
-    )
+    if summary_position == -1:
+        raise ValueError("ИИ не вернул описание изменений")
 
-    start = answer.find("{")
+    summary_start = summary_position + len(SUMMARY_MARKER)
+    file_matches = list(FILE_PATTERN.finditer(answer, summary_start))
 
-    if start == -1:
-        raise ValueError("В ответе ИИ нет JSON")
+    if not file_matches:
+        summary = answer[summary_start:].strip()
 
-    result, _ = json.JSONDecoder().raw_decode(
-        answer[start:]
-    )
+        if not summary:
+            raise ValueError("ИИ вернул пустой ответ")
 
-    return result
+        return summary, []
+
+    summary = answer[summary_start:file_matches[0].start()].strip()
+
+    if not summary:
+        raise ValueError("ИИ не объяснил подготовленные изменения")
+
+    files = []
+
+    for index, match in enumerate(file_matches):
+        path = match.group(1).strip()
+
+        if not path:
+            raise ValueError("ИИ не указал имя файла")
+
+        body_start = match.end()
+
+        if body_start < len(answer) and answer[body_start] == "\n":
+            body_start += 1
+
+        end_position = answer.find(END_MARKER, body_start)
+
+        if end_position == -1:
+            raise ValueError(
+                f"Не найден конец блока файла {path}. "
+                "Возможно, ответ ИИ обрезан."
+            )
+
+        content = answer[body_start:end_position]
+
+        if index + 1 < len(file_matches):
+            between = answer[
+                end_position + len(END_MARKER):
+                file_matches[index + 1].start()
+            ]
+
+            if between.strip():
+                raise ValueError(
+                    "ИИ добавил лишний текст между файлами"
+                )
+        else:
+            tail = answer[end_position + len(END_MARKER):]
+
+            if tail.strip():
+                raise ValueError("ИИ добавил лишний текст после файлов")
+
+        content = content.rstrip("\r\n") + "\n"
+
+        if not content.strip():
+            raise ValueError(f"Файл {path} получился пустым")
+
+        files.append({
+            "path": path,
+            "content": content
+        })
+
+    return summary, files
 
 
 async def prepare_changes(task):
@@ -457,43 +458,29 @@ async def prepare_changes(task):
         "ТЕКУЩИЙ КОД ПРОЕКТА:\n"
         f"{project}\n\n"
         "Выполни только указанную задачу. "
-        "Верни полный текст изменённых файлов."
+        "Верни полное содержимое изменяемых файлов "
+        "в формате специальных разделителей из системной инструкции."
     )
 
-    answer = await ask_ai(
-        CODE_SYSTEM,
-        user_prompt
-    )
+    answer = await ask_ai(CODE_SYSTEM, user_prompt)
 
-    result = extract_json(answer)
+    summary, files = extract_model_files(answer)
 
-    summary = result.get("summary")
-    files = result.get("files")
-
-    if not isinstance(summary, str) or not summary.strip():
-        raise ValueError("ИИ не объяснил подготовленные изменения")
-
-    if not isinstance(files, list) or len(files) > 5:
-        raise ValueError("ИИ вернул неправильный список файлов")
+    if len(files) > 5:
+        raise ValueError("ИИ вернул слишком много файлов")
 
     checked = []
     used_paths = set()
 
     for item in files:
-        if not isinstance(item, dict):
-            raise ValueError("Некорректный формат файла")
-
-        path = safe_path(str(item.get("path", "")))
+        path = safe_path(item["path"])
 
         if path in used_paths:
             raise ValueError(f"Повторяется файл: {path}")
 
         used_paths.add(path)
 
-        content = item.get("content")
-
-        if not isinstance(content, str) or not content.strip():
-            raise ValueError(f"Пустое содержимое файла: {path}")
+        content = item["content"]
 
         if len(content.encode("utf-8")) > 50000:
             raise ValueError(f"Файл слишком большой: {path}")
@@ -503,7 +490,7 @@ async def prepare_changes(task):
             "content": content
         })
 
-    return summary.strip(), checked
+    return summary, checked
 
 
 # =========================
@@ -616,13 +603,9 @@ async def ls(message: Message):
 
         for item in data:
             icon = "📁" if item.get("type") == "dir" else "📄"
-            lines.append(
-                f"{icon} {item.get('name', 'Без имени')}"
-            )
+            lines.append(f"{icon} {item.get('name', 'Без имени')}")
 
-        await message.answer(
-            "\n".join(lines) or "Папка пустая"
-        )
+        await message.answer("\n".join(lines) or "Папка пустая")
 
     except Exception as error:
         await message.answer(f"Ошибка: {error}")
@@ -641,11 +624,7 @@ async def read(message: Message):
 
     try:
         content, _ = await read_github_file(args[1])
-
-        await send_long(
-            message,
-            f"Файл: {args[1]}\n\n{content}"
-        )
+        await send_long(message, f"Файл: {args[1]}\n\n{content}")
 
     except Exception as error:
         await message.answer(f"Ошибка: {error}")
@@ -668,19 +647,16 @@ async def write(message: Message):
 
     try:
         path = safe_path(parts[1])
-
         await save_file(path, parts[2])
 
-        await message.answer(
-            f"Файл {path} записан в GitHub."
-        )
+        await message.answer(f"Файл {path} записан в GitHub.")
 
     except Exception as error:
         await message.answer(f"Ошибка: {error}")
 
 
 # =========================
-# TELEGRAM: РЕЖИМ РАЗРАБОТЧИКА
+# РЕЖИМ РАЗРАБОТЧИКА
 # =========================
 
 @dp.message(Command("code"))
@@ -694,7 +670,7 @@ async def code_command(message: Message):
         await message.answer(
             "Напиши задачу после команды.\n\n"
             "Например:\n"
-            "/code Добавь команду /status"
+            "/code Добавь команду /ping"
         )
         return
 
@@ -730,11 +706,7 @@ async def code_command(message: Message):
 
             for item in files:
                 lines = item["content"].count("\n") + 1
-
-                preview += (
-                    f"📄 {item['path']} "
-                    f"({lines} строк)\n"
-                )
+                preview += f"📄 {item['path']} ({lines} строк)\n"
 
             preview += (
                 "\nПока ничего не записано в GitHub.\n"
@@ -747,7 +719,7 @@ async def code_command(message: Message):
 
         except Exception as error:
             await message.answer(
-                f"Не удалось подготовить изменения:\n"
+                "Не удалось подготовить изменения:\n"
                 f"{str(error)[:1500]}"
             )
 
@@ -763,9 +735,7 @@ async def apply(message: Message):
         changes = pending_changes.get(user_id)
 
         if not changes:
-            await message.answer(
-                "Нет изменений для подтверждения."
-            )
+            await message.answer("Нет изменений для подтверждения.")
             return
 
         await message.answer(
@@ -776,11 +746,7 @@ async def apply(message: Message):
             saved = []
 
             for item in changes["files"]:
-                await save_file(
-                    item["path"],
-                    item["content"]
-                )
-
+                await save_file(item["path"], item["content"])
                 saved.append(item["path"])
 
             del pending_changes[user_id]
@@ -820,13 +786,11 @@ async def reset(message: Message):
 
     chat_history.pop(message.from_user.id, None)
 
-    await message.answer(
-        "История обычного чата очищена."
-    )
+    await message.answer("История обычного чата очищена.")
 
 
 # =========================
-# TELEGRAM: ОБЫЧНЫЙ ЧАТ
+# ОБЫЧНЫЙ ЧАТ
 # =========================
 
 @dp.message()
@@ -840,9 +804,7 @@ async def ordinary_chat(message: Message):
         return
 
     if text.startswith("/"):
-        await message.answer(
-            "Неизвестная команда. Напиши /help."
-        )
+        await message.answer("Неизвестная команда. Напиши /help.")
         return
 
     user_id = message.from_user.id
@@ -851,17 +813,12 @@ async def ordinary_chat(message: Message):
         await message.answer("Думаю...")
 
         try:
-            answer = await chat_with_ai(
-                user_id,
-                text
-            )
-
+            answer = await chat_with_ai(user_id, text)
             await send_long(message, answer)
 
         except Exception as error:
             await message.answer(
-                f"Не получилось получить ответ:\n"
-                f"{str(error)[:1200]}"
+                f"Не получилось получить ответ:\n{str(error)[:1200]}"
             )
 
 
@@ -874,9 +831,7 @@ async def main():
 
     app.router.add_get(
         "/",
-        lambda request: web.Response(
-            text="Губка GPT работает!"
-        )
+        lambda request: web.Response(text="Губка GPT работает!")
     )
 
     runner = web.AppRunner(app)
@@ -884,12 +839,7 @@ async def main():
 
     port = int(os.getenv("PORT", 10000))
 
-    site = web.TCPSite(
-        runner,
-        "0.0.0.0",
-        port
-    )
-
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
     print("Губка GPT запущен!")
