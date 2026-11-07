@@ -2,6 +2,7 @@ import os
 import asyncio
 import base64
 import re
+import ast
 from urllib.parse import quote
 
 from aiohttp import web, ClientSession, ClientTimeout
@@ -29,7 +30,6 @@ if not all((TELEGRAM_TOKEN, OPENROUTER_KEY, GITHUB_TOKEN, ALLOWED_USER_ID)):
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# These dictionaries live in memory. Render restarts clear pending changes/history.
 pending_changes = {}
 chat_history = {}
 user_locks = {}
@@ -77,17 +77,13 @@ def safe_path(path: str) -> str:
 
     forbidden = (".env", ".git", "__pycache__")
 
-    if any(
-        part in forbidden
-        for part in parts
-    ):
+    if any(part in forbidden for part in parts):
         raise ValueError("Этот путь запрещён")
 
     return path
 
 
 async def send_long(message: Message, text: str):
-    # Telegram message limit is 4096 characters. Keep a safety margin.
     for start in range(0, len(text), 3900):
         await message.answer(text[start:start + 3900])
 
@@ -195,10 +191,6 @@ async def get_project_context():
 
 
 async def save_file(path: str, content: str, expected_sha=None):
-    """
-    Save only if the file still has the SHA recorded during preparation.
-    This prevents overwriting a newer GitHub version.
-    """
     path = safe_path(path)
 
     payload = {
@@ -494,7 +486,6 @@ def extract_model_files(answer: str):
                     f"ИИ вернул разные версии одного файла: {path}. "
                     "Подготовка отменена, чтобы не потерять код."
                 )
-            # Идентичный повторный блок пропускается.
             continue
 
         files_by_path[path] = content
@@ -665,6 +656,284 @@ async def prepare_and_stage(message: Message, task: str):
 
 
 # ============================================================
+# SAFE DEVELOPER TEST RUNNER
+# ============================================================
+
+def assert_required(found, required):
+    if set(found) != required:
+        raise AssertionError("Набор функций для тестирования неполный")
+
+
+def run_parser_self_tests(source: str):
+    compile(source, "main.py", "exec")
+    tree = ast.parse(source, filename="main.py")
+
+    required = {"safe_path", "extract_model_files"}
+    found = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in required
+    }
+
+    missing = required - set(found)
+    if missing:
+        raise RuntimeError(
+            "Не найдены функции: " + ", ".join(sorted(missing))
+        )
+
+    isolated_tree = ast.Module(
+        body=[found["safe_path"], found["extract_model_files"]],
+        type_ignores=[],
+    )
+
+    namespace = {
+        "re": re,
+        "ValueError": ValueError,
+        "SUMMARY_MARKER": SUMMARY_MARKER,
+        "FILE_PATTERN": FILE_PATTERN,
+        "END_MARKER": END_MARKER,
+    }
+
+    exec(
+        compile(isolated_tree, "isolated_parser_tests.py", "exec"),
+        namespace,
+    )
+
+    safe_path_fn = namespace["safe_path"]
+    extract_fn = namespace["extract_model_files"]
+
+    passed = []
+    failed = []
+
+    def check(name, callback):
+        try:
+            callback()
+            passed.append(name)
+        except Exception as error:
+            failed.append(
+                f"{name}: {type(error).__name__}: {error}"
+            )
+
+    def expect_error(callback):
+        try:
+            callback()
+        except (ValueError, RuntimeError):
+            return
+        raise AssertionError("Ожидалась ошибка, но функция её не вызвала")
+
+    def block(path, content):
+        clean = content.rstrip("\r\n")
+        return (
+            f"{SUMMARY_MARKER}\nТестовое описание\n\n"
+            f"<<<GUBKA_FILE: {path}>>>\n{clean}\n{END_MARKER}"
+        )
+
+    def test_identical_duplicate():
+        content = "print('hello')\n"
+
+        answer = block("main.py", content) + "\n\n" + (
+            f"<<<GUBKA_FILE: main.py>>>\n{content}{END_MARKER}"
+        )
+
+        summary, files = extract_fn(answer)
+
+        assert summary == "Тестовое описание"
+        assert len(files) == 1
+        assert files[0]["content"] == content
+
+    def test_conflicting_duplicate():
+        answer = block("main.py", "print('one')") + "\n\n" + (
+            f"<<<GUBKA_FILE: main.py>>>\nprint('two')\n{END_MARKER}"
+        )
+
+        expect_error(lambda: extract_fn(answer))
+
+    def test_multiple_files():
+        answer = block("main.py", "print('main')") + "\n\n" + (
+            f"<<<GUBKA_FILE: requirements.txt>>>\naiogram\n{END_MARKER}"
+        )
+
+        _, files = extract_fn(answer)
+
+        assert len(files) == 2
+        assert {item["path"] for item in files} == {
+            "main.py",
+            "requirements.txt",
+        }
+
+    def test_bad_markers():
+        expect_error(lambda: extract_fn("Ответ без маркеров"))
+
+        broken = (
+            f"{SUMMARY_MARKER}\nОписание\n\n"
+            "<<<GUBKA_FILE: main.py>>>\nprint('broken')"
+        )
+
+        expect_error(lambda: extract_fn(broken))
+
+    def test_invalid_paths():
+        expect_error(lambda: safe_path_fn("../secret.txt"))
+        expect_error(lambda: safe_path_fn("{file_name}"))
+        expect_error(lambda: safe_path_fn(".env"))
+
+    def test_valid_nested_path():
+        assert safe_path_fn("src/module.py") == "src/module.py"
+
+    check(
+        "Синтаксис всего main.py",
+        lambda: compile(source, "main.py", "exec"),
+    )
+    check(
+        "Обе функции найдены",
+        lambda: assert_required(found, required),
+    )
+    check(
+        "Одинаковые блоки одного файла",
+        test_identical_duplicate,
+    )
+    check(
+        "Конфликтующие версии файла отклоняются",
+        test_conflicting_duplicate,
+    )
+    check(
+        "Несколько разных файлов",
+        test_multiple_files,
+    )
+    check(
+        "Повреждённые маркеры отклоняются",
+        test_bad_markers,
+    )
+    check(
+        "Опасные пути отклоняются",
+        test_invalid_paths,
+    )
+    check(
+        "Корректный вложенный путь принимается",
+        test_valid_nested_path,
+    )
+
+    return passed, failed
+
+
+async def check_external_services():
+    results = []
+
+    try:
+        repo = await github_request("GET")
+        results.append((
+            "GitHub API",
+            True,
+            repo.get("full_name", GITHUB_REPO),
+        ))
+    except Exception as error:
+        results.append((
+            "GitHub API",
+            False,
+            str(error)[:300],
+        ))
+
+    try:
+        timeout = ClientTimeout(total=20)
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_KEY}",
+        }
+
+        async with ClientSession(timeout=timeout) as session:
+            async with session.get(
+                "https://openrouter.ai/api/v1/models",
+                headers=headers,
+            ) as response:
+                if response.status != 200:
+                    body = await response.text()
+                    raise RuntimeError(
+                        f"HTTP {response.status}: {body[:250]}"
+                    )
+
+                payload = await response.json(content_type=None)
+                count = len(payload.get("data", []))
+
+                results.append((
+                    "OpenRouter API",
+                    True,
+                    f"Доступен, моделей в каталоге: {count}",
+                ))
+
+    except Exception as error:
+        results.append((
+            "OpenRouter API",
+            False,
+            str(error)[:300],
+        ))
+
+    return results
+
+
+async def perform_developer_tests(message: Message):
+    await message.answer(
+        "Запускаю безопасные тесты кода и проверку API..."
+    )
+
+    report = [
+        "ОТЧЁТ ТЕСТИРОВАНИЯ ГУБКИ GPT",
+        "",
+    ]
+
+    try:
+        source, sha = await read_github_file("main.py")
+        passed, failed = run_parser_self_tests(source)
+
+        report.extend([
+            f"GitHub main.py: получен, SHA: {sha[:12]}",
+            "",
+            "ЛОКАЛЬНЫЕ ТЕСТЫ",
+        ])
+
+        report.extend(
+            f"УСПЕХ — {name}"
+            for name in passed
+        )
+
+        report.extend(
+            f"ОШИБКА — {item}"
+            for item in failed
+        )
+
+        report.extend([
+            "",
+            f"ИТОГО: успешно {len(passed)}, ошибок {len(failed)}",
+        ])
+
+    except Exception as error:
+        report.extend([
+            "ЛОКАЛЬНЫЕ ТЕСТЫ НЕ ЗАВЕРШЕНЫ",
+            f"Причина: {type(error).__name__}: {str(error)[:500]}",
+        ])
+
+    report.extend([
+        "",
+        "ПОДКЛЮЧЕНИЕ ВНЕШНИХ СЕРВИСОВ",
+    ])
+
+    for name, ok, detail in await check_external_services():
+        report.append(
+            f"{'ДОСТУПЕН' if ok else 'ОШИБКА'} — {name}: {detail}"
+        )
+
+    report.extend([
+        "",
+        "ГРАНИЦЫ ПРОВЕРКИ",
+        "• Полный main.py скомпилирован, но не запускался.",
+        "• Изолированно исполнены только safe_path и extract_model_files.",
+        "• Произвольные команды оболочки и код проекта не запускались.",
+        "• Реальный ответ генеративной модели не проверялся.",
+        "• Логи Render не читаются этим тестом.",
+        "• Файлы GitHub не изменялись.",
+    ])
+
+    await send_long(message, "\n".join(report))
+
+
+# ============================================================
 # TELEGRAM COMMANDS
 # ============================================================
 
@@ -679,6 +948,7 @@ async def start(message: Message):
         "Обычные сообщения — для общения.\n"
         "/code — изменить проект\n"
         "/inspect — анализ проекта\n"
+        "/test — безопасные тесты Python и проверка API\n"
         "/pending — ожидающие изменения\n"
         "/help — все команды"
     )
@@ -700,6 +970,7 @@ async def help_command(message: Message):
         "/write файл.py текст — подготовить запись файла\n"
         "/code задача — поручить ИИ изменить проект\n"
         "/inspect — анализ проекта\n"
+        "/test — безопасные тесты Python и проверка API\n"
         "/pending — список ожидающих изменений\n"
         "/apply — подтвердить и сохранить изменения\n"
         "/cancel — отменить изменения\n"
@@ -717,6 +988,7 @@ async def status(message: Message):
 
     try:
         repo = await github_request("GET")
+
         await message.answer(
             "СОСТОЯНИЕ ГУБКИ GPT\n\n"
             "Бот: работает\n"
@@ -742,11 +1014,13 @@ async def repo(message: Message):
 
     try:
         data = await github_request("GET")
+
         await message.answer(
             f"Репозиторий: {data.get('full_name')}\n"
             f"Ветка: {GITHUB_BRANCH}\n"
             f"Описание: {data.get('description') or 'Нет'}"
         )
+
     except Exception as error:
         await message.answer(f"Ошибка: {error}")
 
@@ -758,6 +1032,7 @@ async def ls(message: Message):
 
     try:
         args = (message.text or "").split(maxsplit=1)
+
         path = (
             "contents/" + safe_path(args[1])
             if len(args) > 1
@@ -765,10 +1040,12 @@ async def ls(message: Message):
         )
 
         data = await github_request("GET", path)
+
         if isinstance(data, dict):
             data = [data]
 
         lines = []
+
         for item in data:
             icon = "📁" if item.get("type") == "dir" else "📄"
             lines.append(f"{icon} {item.get('name', 'Без имени')}")
@@ -785,6 +1062,7 @@ async def read(message: Message):
         return
 
     args = (message.text or "").split(maxsplit=1)
+
     if len(args) < 2:
         await message.answer("Напиши: /read main.py")
         return
@@ -792,6 +1070,7 @@ async def read(message: Message):
     try:
         content, _ = await read_github_file(args[1])
         await send_long(message, f"Файл: {args[1]}\n\n{content}")
+
     except Exception as error:
         await message.answer(f"Ошибка: {error}")
 
@@ -802,6 +1081,7 @@ async def write(message: Message):
         return
 
     parts = (message.text or "").split(maxsplit=2)
+
     if len(parts) < 3:
         await message.answer(
             "Формат: /write файл.py текст\n"
@@ -818,6 +1098,7 @@ async def write(message: Message):
 
         try:
             _, expected_sha = await read_github_file(path)
+
         except RuntimeError as error:
             if "404" in str(error):
                 expected_sha = None
@@ -849,6 +1130,7 @@ async def code_command(message: Message):
         return
 
     parts = (message.text or "").split(maxsplit=1)
+
     if len(parts) < 2 or not parts[1].strip():
         await message.answer("Формат: /code задача")
         return
@@ -857,12 +1139,22 @@ async def code_command(message: Message):
         await prepare_and_stage(message, parts[1].strip())
 
 
+@dp.message(Command("test"))
+async def test_command(message: Message):
+    if not allowed(message):
+        return
+
+    async with get_lock(message.from_user.id):
+        await perform_developer_tests(message)
+
+
 @dp.message(Command("inspect"))
 async def inspect_command(message: Message):
     if not allowed(message):
         return
 
     args = (message.text or "").split(maxsplit=1)
+
     question = (
         args[1].strip()
         if len(args) > 1
@@ -879,6 +1171,7 @@ async def pending_command(message: Message):
         return
 
     changes = pending_changes.get(message.from_user.id)
+
     if not changes:
         await message.answer("Нет подготовленных изменений.")
         return
@@ -895,7 +1188,12 @@ async def pending_command(message: Message):
         count = item["content"].count("\n")
         lines.append(f"• {item['path']} — {count} строк")
 
-    lines.extend(["", "/apply — сохранить", "/cancel — отменить"])
+    lines.extend([
+        "",
+        "/apply — сохранить",
+        "/cancel — отменить",
+    ])
+
     await send_long(message, "\n".join(lines))
 
 
@@ -913,15 +1211,17 @@ async def apply(message: Message):
             await message.answer("Нет изменений для подтверждения.")
             return
 
-        await message.answer("Проверяю файлы и отправляю изменения в GitHub...")
+        await message.answer(
+            "Проверяю файлы и отправляю изменения в GitHub..."
+        )
 
         try:
-            # Preflight all files before writing any of them.
             for item in changes["files"]:
                 path = item["path"]
 
                 try:
                     _, current_sha = await read_github_file(path)
+
                 except RuntimeError as error:
                     if "404" in str(error):
                         current_sha = None
@@ -942,6 +1242,7 @@ async def apply(message: Message):
                     item["content"],
                     expected_sha=item["expected_sha"],
                 )
+
                 saved.append(item["path"])
 
             pending_changes.pop(user_id, None)
@@ -967,6 +1268,7 @@ async def cancel(message: Message):
         return
 
     pending_changes.pop(message.from_user.id, None)
+
     await message.answer(
         "Подготовленные изменения отменены. В GitHub ничего не отправлено."
     )
@@ -991,6 +1293,7 @@ async def ordinary_chat(message: Message):
         return
 
     text = (message.text or "").strip()
+
     if not text:
         return
 
@@ -1023,6 +1326,7 @@ async def ordinary_chat(message: Message):
                 text,
                 project_context=project_context,
             )
+
             await send_long(message, answer)
 
         except Exception as error:
