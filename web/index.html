@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -11,7 +12,7 @@
   color-scheme:dark;
   --bg:#101010;--panel:#181818;--panel2:#222;
   --border:#303030;--text:#f2f2f2;--muted:#929292;
-  --accent:#d7ff45;
+  --accent:#2585ff;
 }
 *{box-sizing:border-box}
 body{margin:0;height:100dvh;overflow:hidden;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -20,7 +21,7 @@ button{cursor:pointer}
 .app{display:flex;height:100%;width:100%}
 .sidebar{width:270px;flex-shrink:0;display:flex;flex-direction:column;padding:17px 13px;background:#151515;border-right:1px solid var(--border)}
 .brand{display:flex;align-items:center;gap:11px;padding:5px 8px 23px;font-size:19px;font-weight:750}
-.logo{width:35px;height:35px;display:grid;place-items:center;border-radius:11px;background:var(--accent);color:#111;font-weight:900}
+.logo{width:35px;height:35px;display:grid;place-items:center;border-radius:11px;background:var(--accent);color:#fff;font-weight:900}
 .side-btn{width:100%;padding:12px;border:1px solid var(--border);border-radius:11px;background:var(--panel2);color:white;text-align:left;margin-bottom:8px}
 .side-btn.active{border-color:var(--accent);color:var(--accent)}
 .section{margin:20px 8px 9px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:1px}
@@ -38,20 +39,24 @@ button{cursor:pointer}
 .view.active{display:flex}
 .messages{flex:1;overflow-y:auto;width:100%;max-width:900px;margin:auto;padding:28px 25px}
 .welcome{min-height:65%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
-.welcome-logo{width:65px;height:65px;display:grid;place-items:center;margin-bottom:22px;border-radius:21px;background:var(--accent);color:#111;font-size:29px;font-weight:900}
+.welcome-logo{width:65px;height:65px;display:grid;place-items:center;margin-bottom:22px;border-radius:21px;background:var(--accent);color:#fff;font-size:29px;font-weight:900}
 .welcome h1{margin:0;font-size:clamp(25px,5vw,36px);letter-spacing:-1px}
 .welcome p{max-width:380px;color:var(--muted);font-size:14px;line-height:1.6}
 .message{display:flex;gap:13px;margin-bottom:27px;line-height:1.7;overflow-wrap:anywhere}
-.avatar{width:32px;height:32px;flex-shrink:0;display:grid;place-items:center;border-radius:10px;background:#292929;font-size:12px;font-weight:750}
-.message.user .avatar{background:var(--accent);color:#111}
+.avatar{width:32px;height:32px;flex-shrink:0;display:grid;place-items:center;border-radius:10px;background:#292929;font-size:12px;font-weight:750;overflow:hidden}
+.message.user .avatar{background:var(--accent);color:#fff}
+.avatar img{width:100%;height:100%;object-fit:cover;border-radius:inherit}
 .message-content{min-width:0;flex:1}
 .role{margin-bottom:5px;color:var(--muted);font-size:12px}
+.message-tools{display:flex;align-items:center;gap:8px;margin:0 0 8px}
+.copy-btn{border:1px solid var(--border);border-radius:8px;padding:5px 9px;background:#202020;color:#bdbdbd;font-size:11px}
+.copy-btn:active{border-color:var(--accent);color:white}
 .message-text{white-space:pre-wrap}
 .message-text pre{max-width:100%;overflow:auto;padding:14px;border:1px solid var(--border);border-radius:11px;background:#090909}
 .composer-area{width:100%;max-width:900px;margin:auto;padding:10px 25px 19px}
 .composer{display:flex;align-items:flex-end;gap:10px;padding:12px;border:1px solid #393939;border-radius:17px;background:#1b1b1b}
 .composer textarea{flex:1;min-height:27px;max-height:160px;resize:none;border:0;outline:0;background:transparent;color:white;line-height:1.5;font-size:15px}
-.send{width:38px;height:38px;flex-shrink:0;border:0;border-radius:11px;background:var(--accent);color:#111;font-size:20px;font-weight:800}
+.send{width:38px;height:38px;flex-shrink:0;border:0;border-radius:11px;background:var(--accent);color:#fff;font-size:20px;font-weight:800}
 .send:disabled{opacity:.4}
 .note{margin-top:9px;color:#777;text-align:center;font-size:11px}
 .typing{color:var(--muted);font-size:13px;padding:8px 0}
@@ -60,10 +65,10 @@ button{cursor:pointer}
 .terminal-desc{color:var(--muted);font-size:13px;line-height:1.6;margin-bottom:20px}
 .terminal-box{border:1px solid #333;border-radius:14px;background:#080b08;overflow:hidden}
 .terminal-head{padding:11px 14px;background:#171717;border-bottom:1px solid #333;color:#aaa;font-size:12px}
-.terminal-output{min-height:180px;max-height:45vh;overflow:auto;padding:15px;color:#b9e68a;font-family:ui-monospace,monospace;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
+.terminal-output{min-height:180px;max-height:45vh;overflow:auto;padding:15px;color:#a9cfff;font-family:ui-monospace,monospace;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
 .terminal-input{display:flex;gap:8px;padding:10px;border-top:1px solid #333}
-.terminal-input input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:#b9e68a;font-family:monospace}
-.terminal-input button,.action-btn{border:0;border-radius:9px;padding:10px 13px;background:var(--accent);color:#111;font-weight:700}
+.terminal-input input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:#a9cfff;font-family:monospace}
+.terminal-input button,.action-btn{border:0;border-radius:9px;padding:10px 13px;background:var(--accent);color:#fff;font-weight:700}
 .terminal-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:15px}
 .action-btn{background:#252525;color:white;border:1px solid #393939}
 .settings-wrap{max-width:650px;width:100%;margin:0 auto;padding:25px;overflow:auto}
@@ -221,12 +226,48 @@ function renderChat(){
 }
 function drawMessage(role,text){
   const item=document.createElement("div");item.className="message "+role;
-  const avatar=document.createElement("div");avatar.className="avatar";avatar.textContent=role==="user"?"Вы":"G";
+  const avatar=document.createElement("div");avatar.className="avatar";
+  if(role==="user"){
+    const user=tg?.initDataUnsafe?.user;
+    const photo=user?.photo_url;
+    if(photo){
+      const img=document.createElement("img");img.src=photo;img.alt="";avatar.append(img);
+    }else{
+      avatar.textContent=(user?.first_name||"Вы").trim().slice(0,1).toUpperCase();
+    }
+  }else{
+    avatar.textContent="G";
+  }
   const content=document.createElement("div");content.className="message-content";
   const label=document.createElement("div");label.className="role";label.textContent=role==="user"?"Вы":"Gubka-GPT";
   const body=document.createElement("div");body.className="message-text";body.textContent=text;
-  content.append(label,body);item.append(avatar,content);messagesEl.append(item);
+  content.append(label);
+  if(role==="assistant"){
+    const tools=document.createElement("div");tools.className="message-tools";
+    const copy=document.createElement("button");copy.className="copy-btn";copy.type="button";copy.textContent="▢ Скопировать";
+    copy.onclick=()=>copyMessage(text,copy);
+    tools.append(copy);content.append(tools);
+  }
+  content.append(body);item.append(avatar,content);messagesEl.append(item);
   messagesEl.scrollTop=messagesEl.scrollHeight;
+}
+async function copyMessage(text,button){
+  try{
+    if(navigator.clipboard&&window.isSecureContext){
+      await navigator.clipboard.writeText(text);
+    }else{
+      const area=document.createElement("textarea");
+      area.value=text;area.style.position="fixed";area.style.opacity="0";
+      document.body.appendChild(area);area.focus();area.select();
+      const ok=document.execCommand("copy");area.remove();
+      if(!ok)throw new Error("Копирование не поддерживается браузером");
+    }
+    button.textContent="✓ Скопировано";
+    setTimeout(()=>button.textContent="▢ Скопировать",1500);
+  }catch(e){
+    button.textContent="Не удалось скопировать";
+    setTimeout(()=>button.textContent="▢ Скопировать",1800);
+  }
 }
 function switchView(name){
   ["chat","terminal","settings"].forEach(v=>{
