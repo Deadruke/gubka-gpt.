@@ -10,9 +10,9 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 
-# =========================
-# НАСТРОЙКИ
-# =========================
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -23,62 +23,80 @@ GITHUB_REPO = os.getenv("GITHUB_REPO", "Deadruke/gubka-gpt.")
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 
-if not all([TELEGRAM_TOKEN, OPENROUTER_KEY, GITHUB_TOKEN, ALLOWED_USER_ID]):
+if not all((TELEGRAM_TOKEN, OPENROUTER_KEY, GITHUB_TOKEN, ALLOWED_USER_ID)):
     raise RuntimeError("Не настроены обязательные Environment Variables")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
+# These dictionaries live in memory. Render restarts clear pending changes/history.
 pending_changes = {}
 chat_history = {}
 user_locks = {}
 
+MAX_FILE_BYTES = 50_000
+MAX_CONTEXT_CHARS = 55_000
+MAX_FILES_PER_CHANGE = 5
 
-# =========================
-# ОБЩИЕ ФУНКЦИИ
-# =========================
 
-def allowed(message):
+# ============================================================
+# GENERAL HELPERS
+# ============================================================
+
+def allowed(message: Message) -> bool:
     return (
         message.from_user is not None
         and str(message.from_user.id) == ALLOWED_USER_ID
     )
 
 
-def get_lock(user_id):
+def get_lock(user_id: int) -> asyncio.Lock:
     if user_id not in user_locks:
         user_locks[user_id] = asyncio.Lock()
     return user_locks[user_id]
 
 
-def safe_path(path):
-    path = path.strip().strip("/")
+def safe_path(path: str) -> str:
+    path = (path or "").strip()
+
+    if (
+        not path
+        or path.startswith("/")
+        or "\\" in path
+        or ":" in path
+        or "{" in path
+        or "}" in path
+    ):
+        raise ValueError("Некорректный путь к файлу")
+
+    path = path.strip("/")
     parts = path.split("/")
 
     if not path or any(part in ("", ".", "..") for part in parts):
-        raise ValueError("Некорректный путь")
+        raise ValueError("Некорректный путь к файлу")
 
     forbidden = (".env", ".git", "__pycache__")
 
     if any(
-        path == item or path.startswith(item + "/")
-        for item in forbidden
+        part in forbidden
+        for part in parts
     ):
         raise ValueError("Этот путь запрещён")
 
     return path
 
 
-async def send_long(message, text):
+async def send_long(message: Message, text: str):
+    # Telegram message limit is 4096 characters. Keep a safety margin.
     for start in range(0, len(text), 3900):
         await message.answer(text[start:start + 3900])
 
 
-# =========================
+# ============================================================
 # GITHUB
-# =========================
+# ============================================================
 
-async def github_request(method, path="", payload=None):
+async def github_request(method: str, path: str = "", payload=None):
     url = f"https://api.github.com/repos/{GITHUB_REPO}"
 
     if path:
@@ -87,10 +105,10 @@ async def github_request(method, path="", payload=None):
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28"
+        "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    timeout = ClientTimeout(total=40)
+    timeout = ClientTimeout(total=45)
 
     async with ClientSession(timeout=timeout) as session:
         async with session.request(
@@ -102,9 +120,8 @@ async def github_request(method, path="", payload=None):
                 {"ref": GITHUB_BRANCH}
                 if method == "GET" and path.startswith("contents")
                 else None
-            )
+            ),
         ) as response:
-
             result = await response.json(content_type=None)
 
             if response.status >= 400:
@@ -116,17 +133,18 @@ async def github_request(method, path="", payload=None):
             return result
 
 
-async def read_github_file(path):
+async def read_github_file(path: str):
     path = safe_path(path)
-
     result = await github_request("GET", f"contents/{path}")
 
     if result.get("type") != "file":
-        raise RuntimeError("Это не файл")
+        raise RuntimeError(f"{path} — это не файл")
 
-    content = base64.b64decode(
-        result["content"]
-    ).decode("utf-8", errors="replace")
+    encoded = result.get("content", "")
+    content = base64.b64decode(encoded).decode(
+        "utf-8",
+        errors="replace",
+    )
 
     return content, result["sha"]
 
@@ -135,42 +153,52 @@ async def get_project_context():
     root = await github_request("GET", "contents")
 
     if not isinstance(root, list):
-        raise RuntimeError("Не удалось получить список файлов")
+        raise RuntimeError("Не удалось получить список файлов репозитория")
 
-    important_files = [
+    important_files = (
         "main.py",
         "requirements.txt",
         "render.yaml",
-        "README.md"
-    ]
+        "README.md",
+    )
 
-    root_names = {
-        item["name"]
+    root_files = {
+        item.get("name")
         for item in root
         if item.get("type") == "file"
     }
 
-    context = []
+    sections = []
+    total_chars = 0
 
     for name in important_files:
-        if name not in root_names:
+        if name not in root_files:
             continue
 
-        try:
-            content, _ = await read_github_file(name)
-            context.append(
-                f"\n===== ФАЙЛ: {name} =====\n{content[:16000]}"
+        content, _ = await read_github_file(name)
+        section = f"\n===== FILE: {name} =====\n{content}"
+
+        if total_chars + len(section) > MAX_CONTEXT_CHARS:
+            raise RuntimeError(
+                f"Контекст проекта превышает лимит. Файл {name} "
+                "не был обрезан или передан частично. Нужно анализировать "
+                "проект отдельными частями."
             )
-        except Exception as error:
-            context.append(f"\nНе удалось прочитать {name}: {error}")
 
-    if not context:
-        raise RuntimeError("Файлы проекта не найдены")
+        sections.append(section)
+        total_chars += len(section)
 
-    return "\n".join(context)
+    if not sections:
+        raise RuntimeError("Не найдены основные файлы проекта")
+
+    return "\n".join(sections)
 
 
-async def save_file(path, content):
+async def save_file(path: str, content: str, expected_sha=None):
+    """
+    Save only if the file still has the SHA recorded during preparation.
+    This prevents overwriting a newer GitHub version.
+    """
     path = safe_path(path)
 
     payload = {
@@ -178,36 +206,55 @@ async def save_file(path, content):
         "content": base64.b64encode(
             content.encode("utf-8")
         ).decode("ascii"),
-        "branch": GITHUB_BRANCH
+        "branch": GITHUB_BRANCH,
     }
 
     try:
-        _, sha = await read_github_file(path)
-        payload["sha"] = sha
+        _, current_sha = await read_github_file(path)
+
+        if expected_sha is None:
+            raise RuntimeError(
+                f"Файл {path} уже существует. Подготовь изменения заново."
+            )
+
+        if current_sha != expected_sha:
+            raise RuntimeError(
+                f"Файл {path} изменился после подготовки. "
+                "Изменения не сохранены — подготовь их заново."
+            )
+
+        payload["sha"] = current_sha
+
     except RuntimeError as error:
         if "404" not in str(error):
             raise
 
+        if expected_sha is not None:
+            raise RuntimeError(
+                f"Файл {path} удалён после подготовки. "
+                "Изменения не сохранены."
+            )
+
     return await github_request("PUT", f"contents/{path}", payload)
 
 
-# =========================
-# OPENROUTER / ИИ
-# =========================
+# ============================================================
+# OPENROUTER
+# ============================================================
 
-async def ask_ai(system_prompt, user_prompt, max_tokens=14000):
+async def ask_ai(system_prompt: str, user_prompt: str, max_tokens=14000):
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     data = {
         "model": MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
+            {"role": "user", "content": user_prompt},
         ],
-        "max_tokens": max_tokens
+        "max_tokens": max_tokens,
     }
 
     timeout = ClientTimeout(total=180)
@@ -216,15 +263,13 @@ async def ask_ai(system_prompt, user_prompt, max_tokens=14000):
         async with session.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
-            json=data
+            json=data,
         ) as response:
-
             result = await response.json(content_type=None)
 
             if response.status != 200:
                 raise RuntimeError(
-                    f"OpenRouter ({response.status}): "
-                    f"{str(result)[:1000]}"
+                    f"OpenRouter ({response.status}): {str(result)[:1000]}"
                 )
 
             choices = result.get("choices", [])
@@ -232,134 +277,134 @@ async def ask_ai(system_prompt, user_prompt, max_tokens=14000):
             if not choices:
                 raise RuntimeError("ИИ не вернул ответ")
 
-            content = choices[0]["message"].get("content")
+            choice = choices[0]
+            content = choice.get("message", {}).get("content")
 
             if not isinstance(content, str) or not content.strip():
                 raise RuntimeError("ИИ вернул пустой ответ")
 
+            if choice.get("finish_reason") == "length":
+                raise RuntimeError(
+                    "Ответ ИИ обрезан из-за лимита токенов. "
+                    "Изменения не подготовлены."
+                )
+
             return content.strip()
 
 
-# =========================
-# ОБЫЧНЫЙ ЧАТ
-# =========================
+# ============================================================
+# NORMAL CHAT
+# ============================================================
 
 CHAT_SYSTEM = """
 Ты — Губка GPT, личный ИИ-помощник пользователя.
 
-Общайся на русском языке.
-Отвечай естественно, понятно и по делу.
+Общайся на русском языке, естественно и по делу.
 Помогай с вопросами, идеями, обучением и программированием.
 
-Обычный чат — это только разговор.
-Не пытайся менять файлы GitHub.
-Не утверждай, что выполнил действия, которых не выполнял.
-Если пользователь хочет изменить проект, предложи использовать /code.
+Если тебе передан контекст GitHub-проекта, используй именно его.
+Не утверждай, что читал файлы, запускал тесты, менял GitHub или выполнял
+действия, если соответствующая операция реально не была выполнена.
+
+Изменения проекта сначала только подготавливаются.
+Записывать их в GitHub разрешено только после отдельного подтверждения /apply.
+Если контекста проекта нет, не выдумывай содержимое репозитория.
 """
 
 
-async def chat_with_ai(user_id, text):
+async def chat_with_ai(user_id: int, text: str, project_context=None):
     history = chat_history.setdefault(user_id, [])
 
-    messages = [
-        {"role": "system", "content": CHAT_SYSTEM}
-    ]
+    system_prompt = CHAT_SYSTEM
+    if project_context:
+        system_prompt += (
+            "\n\nАКТУАЛЬНЫЙ КОНТЕКСТ GITHUB-ПРОЕКТА:\n"
+            + project_context
+        )
 
+    messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history[-10:])
     messages.append({"role": "user", "content": text})
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     data = {
         "model": MODEL,
         "messages": messages,
-        "max_tokens": 2000
+        "max_tokens": 2500,
     }
 
-    timeout = ClientTimeout(total=90)
+    timeout = ClientTimeout(total=120)
 
     async with ClientSession(timeout=timeout) as session:
         async with session.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
-            json=data
+            json=data,
         ) as response:
-
             result = await response.json(content_type=None)
 
             if response.status != 200:
                 raise RuntimeError(
-                    f"OpenRouter ({response.status}): "
-                    f"{str(result)[:800]}"
+                    f"OpenRouter ({response.status}): {str(result)[:800]}"
                 )
 
             choices = result.get("choices", [])
-
             if not choices:
                 raise RuntimeError("ИИ не вернул ответ")
 
-            answer = choices[0]["message"].get("content")
+            answer = choices[0].get("message", {}).get("content")
 
             if not isinstance(answer, str) or not answer.strip():
                 raise RuntimeError("Получен пустой ответ")
 
     history.append({"role": "user", "content": text})
     history.append({"role": "assistant", "content": answer})
-
     chat_history[user_id] = history[-20:]
 
     return answer.strip()
 
 
-# =========================
-# ИИ-РАЗРАБОТЧИК
-# =========================
+# ============================================================
+# CODE DEVELOPER
+# ============================================================
 
 CODE_SYSTEM = r"""
 Ты — Губка GPT, ИИ-разработчик существующего Python-проекта.
 
 Тебе переданы задача пользователя и текущие файлы проекта.
 
-ГЛАВНАЯ ЦЕЛЬ:
-Выполнить именно задачу пользователя.
-Не подменяй её другими улучшениями.
-
-ПРАВИЛА:
-1. Внимательно изучи текущий код.
-2. Не меняй функции, не связанные с задачей.
-3. Сохраняй существующие возможности проекта.
+ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА:
+1. Выполняй только задачу пользователя.
+2. Внимательно изучай текущий код.
+3. Сохраняй все существующие возможности и команды.
 4. Возвращай полный новый текст каждого изменяемого файла.
-5. Не используй сокращения вроде "... остальной код без изменений".
+5. Никогда не используй сокращения и заглушки вместо кода.
 6. Не придумывай результаты тестов.
 7. Не раскрывай секреты и токены.
 8. Не добавляй секреты в файлы.
 9. Не изменяй .env, .git и секретные файлы.
 10. Не удаляй файлы.
-11. Не более пяти изменяемых файлов.
-12. Если задача уже выполнена, верни пустой список файлов.
-13. Если информации недостаточно, объясни это в описании и не меняй файлы.
-14. Не добавляй приветствия и несвязанные функции.
-15. Для Telegram-команд учитывай существующую архитектуру aiogram.
+11. Максимум пять изменяемых файлов.
+12. Если задача уже выполнена, не возвращай файлы.
+13. Если информации недостаточно, объясни это и не меняй файлы.
+14. Не добавляй приветствия и посторонние функции.
+15. Не используй JSON.
 
-ВАЖНО: НЕ ИСПОЛЬЗУЙ JSON.
-
-Верни ответ строго в следующем формате:
+ФОРМАТ ОТВЕТА СТРОГО ТАКОЙ:
 
 <<<GUBKA_SUMMARY>>>
 Краткое описание изменений
 
 <<<GUBKA_FILE: main.py>>>
-Здесь полный исходный код файла без Markdown-ограждений.
+Полное содержимое файла без Markdown-ограждений.
 <<<GUBKA_END_FILE>>>
 
-Для нескольких файлов повторяй блок GUBKA_FILE.
-
-Если изменений нет, верни только блок GUBKA_SUMMARY с объяснением.
-
-Не используй эти специальные маркеры внутри содержимого файлов.
+Для каждого дополнительного файла используй отдельный блок GUBKA_FILE.
+Не используй специальные маркеры внутри кода.
 Не добавляй текст до первого маркера или после последнего.
 Не обрезай файлы.
 """
@@ -372,82 +417,97 @@ FILE_PATTERN = re.compile(
 END_MARKER = "<<<GUBKA_END_FILE>>>"
 
 
-def extract_model_files(answer):
+def extract_model_files(answer: str):
     answer = answer.strip()
 
     summary_position = answer.find(SUMMARY_MARKER)
-
     if summary_position == -1:
         raise ValueError("ИИ не вернул описание изменений")
 
+    if answer[:summary_position].strip():
+        raise ValueError("ИИ добавил лишний текст перед описанием изменений")
+
     summary_start = summary_position + len(SUMMARY_MARKER)
-    file_matches = list(FILE_PATTERN.finditer(answer, summary_start))
+    matches = list(FILE_PATTERN.finditer(answer, summary_start))
 
-    if not file_matches:
+    if not matches:
         summary = answer[summary_start:].strip()
-
         if not summary:
             raise ValueError("ИИ вернул пустой ответ")
-
         return summary, []
 
-    summary = answer[summary_start:file_matches[0].start()].strip()
-
+    summary = answer[summary_start:matches[0].start()].strip()
     if not summary:
         raise ValueError("ИИ не объяснил подготовленные изменения")
 
-    files = []
+    files_by_path = {}
 
-    for index, match in enumerate(file_matches):
-        path = match.group(1).strip()
+    for index, match in enumerate(matches):
+        raw_path = match.group(1).strip()
 
-        if not path:
-            raise ValueError("ИИ не указал имя файла")
+        if not raw_path or "{" in raw_path or "}" in raw_path:
+            raise ValueError("ИИ указал некорректное имя файла")
 
+        path = safe_path(raw_path)
         body_start = match.end()
 
         if body_start < len(answer) and answer[body_start] == "\n":
             body_start += 1
 
         end_position = answer.find(END_MARKER, body_start)
+        next_file_position = (
+            matches[index + 1].start()
+            if index + 1 < len(matches)
+            else -1
+        )
 
-        if end_position == -1:
+        if end_position == -1 or (
+            next_file_position != -1 and next_file_position < end_position
+        ):
             raise ValueError(
-                f"Не найден конец блока файла {path}. "
-                "Возможно, ответ ИИ обрезан."
+                f"Блок файла {path} обрезан или не закрыт. "
+                "Такой файл нельзя безопасно использовать."
             )
 
         content = answer[body_start:end_position]
-
-        if index + 1 < len(file_matches):
-            between = answer[
-                end_position + len(END_MARKER):
-                file_matches[index + 1].start()
-            ]
-
-            if between.strip():
-                raise ValueError(
-                    "ИИ добавил лишний текст между файлами"
-                )
-        else:
-            # Дополнительный текст после закрытого последнего файла
-            # игнорируется, так как содержимое файла уже завершено.
-            pass
-
         content = content.rstrip("\r\n") + "\n"
 
         if not content.strip():
             raise ValueError(f"Файл {path} получился пустым")
 
-        files.append({
-            "path": path,
-            "content": content
-        })
+        after_end = end_position + len(END_MARKER)
+
+        if next_file_position != -1:
+            between = answer[after_end:next_file_position]
+            if between.strip():
+                raise ValueError("ИИ добавил лишний текст между файлами")
+        else:
+            trailing = answer[after_end:]
+            if trailing.strip():
+                raise ValueError("ИИ добавил лишний текст после последнего файла")
+
+        previous = files_by_path.get(path)
+
+        if previous is not None:
+            if previous != content:
+                raise ValueError(
+                    f"ИИ вернул разные версии одного файла: {path}. "
+                    "Подготовка отменена, чтобы не потерять код."
+                )
+            # Идентичный повторный блок пропускается.
+            continue
+
+        files_by_path[path] = content
+
+    files = [
+        {"path": path, "content": content}
+        for path, content in files_by_path.items()
+    ]
 
     return summary, files
 
 
-async def prepare_changes(task):
+async def prepare_changes(task: str):
     project = await get_project_context()
 
     user_prompt = (
@@ -455,45 +515,158 @@ async def prepare_changes(task):
         f"{task}\n\n"
         "ТЕКУЩИЙ КОД ПРОЕКТА:\n"
         f"{project}\n\n"
-        "Выполни только указанную задачу. "
-        "Верни полное содержимое изменяемых файлов "
-        "в формате специальных разделителей из системной инструкции."
+        "Выполни только указанную задачу. Верни полное содержимое "
+        "изменяемых файлов в формате специальных разделителей."
     )
 
     answer = await ask_ai(CODE_SYSTEM, user_prompt)
-
     summary, files = extract_model_files(answer)
 
-    if len(files) > 5:
-        raise ValueError("ИИ вернул слишком много файлов")
+    if len(files) > MAX_FILES_PER_CHANGE:
+        raise ValueError("ИИ вернул слишком много разных файлов")
 
     checked = []
-    used_paths = set()
 
     for item in files:
         path = safe_path(item["path"])
-
-        if path in used_paths:
-            raise ValueError(f"Повторяется файл: {path}")
-
-        used_paths.add(path)
-
         content = item["content"]
 
-        if len(content.encode("utf-8")) > 50000:
+        if len(content.encode("utf-8")) > MAX_FILE_BYTES:
             raise ValueError(f"Файл слишком большой: {path}")
+
+        try:
+            _, expected_sha = await read_github_file(path)
+        except RuntimeError as error:
+            if "404" in str(error):
+                expected_sha = None
+            else:
+                raise
 
         checked.append({
             "path": path,
-            "content": content
+            "content": content,
+            "expected_sha": expected_sha,
         })
 
     return summary, checked
 
 
-# =========================
-# TELEGRAM: КОМАНДЫ
-# =========================
+# ============================================================
+# PROJECT INTENT ROUTING
+# ============================================================
+
+def detect_project_intent(text: str):
+    value = text.lower()
+
+    project_terms = (
+        "губк", "бот", "проект", "репозитор", "github",
+        "main.py", "requirements.txt", "код бота", "файл бота",
+    )
+    inspect_terms = (
+        "проверь", "посмотри", "изучи", "прочитай", "найди ошиб",
+        "почему не работает", "проанализируй", "покажи файлы",
+    )
+    edit_terms = (
+        "добавь", "измени", "исправь", "создай", "перепиши",
+        "улучши", "реализуй", "добавить", "исправить",
+    )
+
+    if not any(term in value for term in project_terms):
+        return None
+
+    if any(term in value for term in edit_terms):
+        return "edit"
+
+    if any(term in value for term in inspect_terms):
+        return "inspect"
+
+    return "context"
+
+
+async def inspect_project(message: Message, question: str):
+    await message.answer("Читаю актуальные файлы GitHub и анализирую проект...")
+
+    try:
+        context = await get_project_context()
+        prompt = (
+            "Проанализируй проект только по переданным файлам. "
+            "Указывай конкретные функции и файлы. Не утверждай, что "
+            "запускал тесты или сервер. Если информации недостаточно, "
+            "скажи об этом.\n\n"
+            f"ВОПРОС:\n{question}\n\n"
+            f"ФАЙЛЫ ПРОЕКТА:\n{context}"
+        )
+
+        answer = await ask_ai(
+            "Ты — технический аналитик Python-проектов. "
+            "Отвечай на русском, точно и понятно.",
+            prompt,
+            max_tokens=3500,
+        )
+
+        await send_long(message, answer)
+
+    except Exception as error:
+        await message.answer(
+            f"Не удалось проанализировать проект:\n{str(error)[:1200]}"
+        )
+
+
+async def prepare_and_stage(message: Message, task: str):
+    user_id = message.from_user.id
+    await message.answer("Изучаю GitHub и готовлю изменения...")
+
+    try:
+        summary, files = await prepare_changes(task)
+
+        if not files:
+            await message.answer(f"Изменения не нужны.\n\n{summary}")
+            return
+
+        pending_changes[user_id] = {
+            "task": task,
+            "summary": summary,
+            "files": files,
+        }
+
+        lines = [
+            "ПОДГОТОВЛЕНЫ ИЗМЕНЕНИЯ",
+            "",
+            f"Задача: {task}",
+            "",
+            f"Описание: {summary}",
+            "",
+            "Файлы:",
+        ]
+
+        for item in files:
+            count = item["content"].count("\n")
+            state = (
+                "новый файл"
+                if item["expected_sha"] is None
+                else "замена существующего"
+            )
+            lines.append(f"📄 {item['path']} — {count} строк, {state}")
+
+        lines.extend([
+            "",
+            "В GitHub пока ничего не записано.",
+            "/pending — посмотреть подготовку",
+            "/apply — сохранить",
+            "/cancel — отменить",
+        ])
+
+        await send_long(message, "\n".join(lines))
+
+    except Exception as error:
+        await message.answer(
+            f"Не удалось подготовить изменения:\n{str(error)[:1500]}"
+        )
+
+
+# ============================================================
+# TELEGRAM COMMANDS
+# ============================================================
 
 @dp.message(Command("start"))
 async def start(message: Message):
@@ -502,11 +675,12 @@ async def start(message: Message):
 
     await message.answer(
         "Привет! Я Губка GPT.\n\n"
-        "Я могу общаться с тобой и помогать "
-        "работать над твоим GitHub-проектом.\n\n"
+        "Я могу общаться, анализировать проект и готовить изменения GitHub.\n\n"
         "Обычные сообщения — для общения.\n"
-        "/code — изменить проект.\n"
-        "/help — все команды."
+        "/code — изменить проект\n"
+        "/inspect — анализ проекта\n"
+        "/pending — ожидающие изменения\n"
+        "/help — все команды"
     )
 
 
@@ -523,12 +697,14 @@ async def help_command(message: Message):
         "/ls — список файлов\n"
         "/ls папка — содержимое папки\n"
         "/read main.py — прочитать файл\n"
-        "/write файл.py текст — записать файл\n"
+        "/write файл.py текст — подготовить запись файла\n"
         "/code задача — поручить ИИ изменить проект\n"
-        "/apply — подтвердить изменения\n"
+        "/inspect — анализ проекта\n"
+        "/pending — список ожидающих изменений\n"
+        "/apply — подтвердить и сохранить изменения\n"
         "/cancel — отменить изменения\n"
         "/reset — очистить историю чата\n\n"
-        "Просто отправляй сообщения, чтобы общаться со мной."
+        "Изменения GitHub сохраняются только после /apply."
     )
 
 
@@ -541,13 +717,12 @@ async def status(message: Message):
 
     try:
         repo = await github_request("GET")
-
         await message.answer(
             "СОСТОЯНИЕ ГУБКИ GPT\n\n"
             "Бот: работает\n"
             "ИИ: настроен\n"
             "GitHub: подключён\n"
-            f"Репозиторий: {repo['full_name']}\n"
+            f"Репозиторий: {repo.get('full_name', GITHUB_REPO)}\n"
             f"Ветка: {GITHUB_BRANCH}\n"
             f"Модель: {MODEL}\n"
             f"Ожидают подтверждения: "
@@ -567,13 +742,11 @@ async def repo(message: Message):
 
     try:
         data = await github_request("GET")
-
         await message.answer(
-            f"Репозиторий: {data['full_name']}\n"
+            f"Репозиторий: {data.get('full_name')}\n"
             f"Ветка: {GITHUB_BRANCH}\n"
             f"Описание: {data.get('description') or 'Нет'}"
         )
-
     except Exception as error:
         await message.answer(f"Ошибка: {error}")
 
@@ -585,7 +758,6 @@ async def ls(message: Message):
 
     try:
         args = (message.text or "").split(maxsplit=1)
-
         path = (
             "contents/" + safe_path(args[1])
             if len(args) > 1
@@ -593,12 +765,10 @@ async def ls(message: Message):
         )
 
         data = await github_request("GET", path)
-
         if isinstance(data, dict):
             data = [data]
 
         lines = []
-
         for item in data:
             icon = "📁" if item.get("type") == "dir" else "📄"
             lines.append(f"{icon} {item.get('name', 'Без имени')}")
@@ -615,7 +785,6 @@ async def read(message: Message):
         return
 
     args = (message.text or "").split(maxsplit=1)
-
     if len(args) < 2:
         await message.answer("Напиши: /read main.py")
         return
@@ -623,7 +792,6 @@ async def read(message: Message):
     try:
         content, _ = await read_github_file(args[1])
         await send_long(message, f"Файл: {args[1]}\n\n{content}")
-
     except Exception as error:
         await message.answer(f"Ошибка: {error}")
 
@@ -634,28 +802,46 @@ async def write(message: Message):
         return
 
     parts = (message.text or "").split(maxsplit=2)
-
     if len(parts) < 3:
         await message.answer(
-            "Формат:\n"
-            "/write test.py\n"
-            "print('Hello world')"
+            "Формат: /write файл.py текст\n"
+            "Файл будет подготовлен, но записан только после /apply."
         )
         return
 
     try:
         path = safe_path(parts[1])
-        await save_file(path, parts[2])
+        content = parts[2]
 
-        await message.answer(f"Файл {path} записан в GitHub.")
+        if len(content.encode("utf-8")) > MAX_FILE_BYTES:
+            raise ValueError("Файл слишком большой (лимит 50 КБ)")
+
+        try:
+            _, expected_sha = await read_github_file(path)
+        except RuntimeError as error:
+            if "404" in str(error):
+                expected_sha = None
+            else:
+                raise
+
+        pending_changes[message.from_user.id] = {
+            "task": f"Создать или обновить {path}",
+            "summary": "Файл подготовлен командой /write.",
+            "files": [{
+                "path": path,
+                "content": content,
+                "expected_sha": expected_sha,
+            }],
+        }
+
+        await message.answer(
+            f"Файл {path} подготовлен. В GitHub ничего не записано.\n"
+            "Используй /pending, затем /apply или /cancel."
+        )
 
     except Exception as error:
         await message.answer(f"Ошибка: {error}")
 
-
-# =========================
-# РЕЖИМ РАЗРАБОТЧИКА
-# =========================
 
 @dp.message(Command("code"))
 async def code_command(message: Message):
@@ -663,63 +849,54 @@ async def code_command(message: Message):
         return
 
     parts = (message.text or "").split(maxsplit=1)
-
     if len(parts) < 2 or not parts[1].strip():
-        await message.answer(
-            "Напиши задачу после команды.\n\n"
-            "Например:\n"
-            "/code Добавь команду /ping"
-        )
+        await message.answer("Формат: /code задача")
         return
 
-    task = parts[1].strip()
-    user_id = message.from_user.id
+    async with get_lock(message.from_user.id):
+        await prepare_and_stage(message, parts[1].strip())
 
-    async with get_lock(user_id):
-        await message.answer(
-            "Изучаю проект и готовлю изменения под твою задачу..."
-        )
 
-        try:
-            summary, files = await prepare_changes(task)
+@dp.message(Command("inspect"))
+async def inspect_command(message: Message):
+    if not allowed(message):
+        return
 
-            if not files:
-                await message.answer(
-                    f"Изменения не подготовлены.\n\n{summary}"
-                )
-                return
+    args = (message.text or "").split(maxsplit=1)
+    question = (
+        args[1].strip()
+        if len(args) > 1
+        else "Проведи обзор архитектуры, функций, рисков и приоритетных улучшений."
+    )
 
-            pending_changes[user_id] = {
-                "task": task,
-                "summary": summary,
-                "files": files
-            }
+    async with get_lock(message.from_user.id):
+        await inspect_project(message, question)
 
-            preview = (
-                "ПОДГОТОВЛЕНЫ ИЗМЕНЕНИЯ\n\n"
-                f"Твоя задача:\n{task}\n\n"
-                f"Что подготовлено:\n{summary}\n\n"
-                "Файлы:\n"
-            )
 
-            for item in files:
-                lines = item["content"].count("\n") + 1
-                preview += f"📄 {item['path']} ({lines} строк)\n"
+@dp.message(Command("pending"))
+async def pending_command(message: Message):
+    if not allowed(message):
+        return
 
-            preview += (
-                "\nПока ничего не записано в GitHub.\n"
-                "Проверь описание.\n\n"
-                "/apply — сохранить изменения\n"
-                "/cancel — отменить"
-            )
+    changes = pending_changes.get(message.from_user.id)
+    if not changes:
+        await message.answer("Нет подготовленных изменений.")
+        return
 
-            await message.answer(preview)
+    lines = [
+        "ИЗМЕНЕНИЯ ОЖИДАЮТ ПОДТВЕРЖДЕНИЯ",
+        "",
+        changes["summary"],
+        "",
+        "Файлы:",
+    ]
 
-        except Exception as error:
-            await message.answer(
-                "Не удалось подготовить изменения:\n"
-                f"{str(error)[:1500]}"
-            )
+    for item in changes["files"]:
+        count = item["content"].count("\n")
+        lines.append(f"• {item['path']} — {count} строк")
+
+    lines.extend(["", "/apply — сохранить", "/cancel — отменить"])
+    await send_long(message, "\n".join(lines))
 
 
 @dp.message(Command("apply"))
@@ -736,18 +913,38 @@ async def apply(message: Message):
             await message.answer("Нет изменений для подтверждения.")
             return
 
-        await message.answer(
-            "Отправляю подготовленные файлы в GitHub..."
-        )
+        await message.answer("Проверяю файлы и отправляю изменения в GitHub...")
 
         try:
+            # Preflight all files before writing any of them.
+            for item in changes["files"]:
+                path = item["path"]
+
+                try:
+                    _, current_sha = await read_github_file(path)
+                except RuntimeError as error:
+                    if "404" in str(error):
+                        current_sha = None
+                    else:
+                        raise
+
+                if current_sha != item["expected_sha"]:
+                    raise RuntimeError(
+                        f"Файл {path} изменился после подготовки. "
+                        "Ничего не записано. Подготовь изменения заново."
+                    )
+
             saved = []
 
             for item in changes["files"]:
-                await save_file(item["path"], item["content"])
+                await save_file(
+                    item["path"],
+                    item["content"],
+                    expected_sha=item["expected_sha"],
+                )
                 saved.append(item["path"])
 
-            del pending_changes[user_id]
+            pending_changes.pop(user_id, None)
 
             await message.answer(
                 "Изменения сохранены в GitHub!\n\n"
@@ -759,8 +956,8 @@ async def apply(message: Message):
             await message.answer(
                 "Ошибка при сохранении:\n"
                 f"{str(error)[:1200]}\n\n"
-                "Если часть файлов уже сохранилась, "
-                "проверь GitHub перед повторной попыткой."
+                "Если сохранялось несколько файлов, проверь GitHub: "
+                "GitHub API не объединяет несколько файлов в одну атомарную операцию."
             )
 
 
@@ -770,10 +967,8 @@ async def cancel(message: Message):
         return
 
     pending_changes.pop(message.from_user.id, None)
-
     await message.answer(
-        "Подготовленные изменения отменены. "
-        "В GitHub ничего не отправлено."
+        "Подготовленные изменения отменены. В GitHub ничего не отправлено."
     )
 
 
@@ -783,13 +978,12 @@ async def reset(message: Message):
         return
 
     chat_history.pop(message.from_user.id, None)
-
     await message.answer("История обычного чата очищена.")
 
 
-# =========================
-# ОБЫЧНЫЙ ЧАТ
-# =========================
+# ============================================================
+# SMART NORMAL CHAT ROUTER
+# ============================================================
 
 @dp.message()
 async def ordinary_chat(message: Message):
@@ -797,7 +991,6 @@ async def ordinary_chat(message: Message):
         return
 
     text = (message.text or "").strip()
-
     if not text:
         return
 
@@ -806,12 +999,30 @@ async def ordinary_chat(message: Message):
         return
 
     user_id = message.from_user.id
+    intent = detect_project_intent(text)
 
     async with get_lock(user_id):
+        if intent == "edit":
+            await prepare_and_stage(message, text)
+            return
+
+        if intent == "inspect":
+            await inspect_project(message, text)
+            return
+
         await message.answer("Думаю...")
 
         try:
-            answer = await chat_with_ai(user_id, text)
+            project_context = None
+
+            if intent == "context":
+                project_context = await get_project_context()
+
+            answer = await chat_with_ai(
+                user_id,
+                text,
+                project_context=project_context,
+            )
             await send_long(message, answer)
 
         except Exception as error:
@@ -820,28 +1031,27 @@ async def ordinary_chat(message: Message):
             )
 
 
-# =========================
-# ЗАПУСК
-# =========================
+# ============================================================
+# WEB HEALTH CHECK / STARTUP
+# ============================================================
 
 async def main():
     app = web.Application()
 
-    app.router.add_get(
-        "/",
-        lambda request: web.Response(text="Губка GPT работает!")
-    )
+    async def health(_request):
+        return web.Response(text="Губка GPT работает!")
+
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
 
     runner = web.AppRunner(app)
     await runner.setup()
 
     port = int(os.getenv("PORT", 10000))
-
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
     print("Губка GPT запущен!")
-
     await dp.start_polling(bot)
 
 
