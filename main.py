@@ -38,19 +38,23 @@ from oauth_auth import (
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY", "").strip()
+XAI_API_KEY = os.getenv("XAI_API_KEY", "").strip()
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "").strip()
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
+CLOUDFLARE_MODEL = os.getenv("CLOUDFLARE_MODEL", "@cf/zai-org/glm-4.7-flash").strip()
+SAMBANOVA_API_KEY = os.getenv("SAMBANOVA_API_KEY", "").strip()
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
 
 RENDER_API_KEY = os.getenv("RENDER_API_KEY", "").strip()
 
 GITHUB_REPO = os.getenv(
-    "GITHUB_REPO", "Deadruke/gubka-gpt."
+    "GITHUB_REPO", "Deadruke/gubka-gpt"
 ).strip().strip("/")
 
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip()
-MODEL = os.getenv(
-    "OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it:free"
-).strip()
+MODEL = os.getenv("DEFAULT_AI_MODEL", "").strip()
 
 WEB_APP_URL = os.getenv(
     "WEB_APP_URL", "https://gubka-gpt.onrender.com"
@@ -67,16 +71,18 @@ MAX_MESSAGE_LENGTH = 12000
 MODEL_CATALOG_TTL = 900
 MODELS_PER_PROVIDER = 15
 MODEL_PROVIDERS = {
-    "openai": "OpenAI",
-    "anthropic": "Anthropic",
-    "google": "Google Gemini",
-    "deepseek": "DeepSeek",
-    "x-ai": "xAI Grok",
-    "meta-llama": "Meta Llama",
-    "mistralai": "Mistral",
-    "qwen": "Qwen",
-    "cohere": "Cohere",
-    "perplexity": "Perplexity",
+    "xai": "xAI Grok",
+    "mistral": "Mistral",
+    "cloudflare": "Cloudflare Workers AI",
+    "sambanova": "SambaNova",
+    "openrouter": "OpenRouter",
+}
+
+DIRECT_MODELS = {
+    "xai": [("grok-4.7", "Grok 4.7")],
+    "mistral": [("mistral-large-latest", "Mistral Large")],
+    "cloudflare": [(CLOUDFLARE_MODEL, "Cloudflare GLM / Workers AI")],
+    "sambanova": [("Meta-Llama-3.3-70B-Instruct", "Llama 3.3 70B")],
 }
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=120)
@@ -87,12 +93,26 @@ RENDER_API = "https://api.render.com/v1"
 
 for key, value in {
     "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
-    "OPENROUTER_KEY": OPENROUTER_KEY,
     "GITHUB_TOKEN": GITHUB_TOKEN,
     "ALLOWED_USER_ID": ALLOWED_USER_ID,
 }.items():
     if not value:
         raise RuntimeError(f"Не задана переменная Render: {key}")
+
+if not any((OPENROUTER_KEY, XAI_API_KEY, MISTRAL_API_KEY,
+            (CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID), SAMBANOVA_API_KEY)):
+    raise RuntimeError("Добавь хотя бы один AI API ключ в переменные Render.")
+
+if not MODEL:
+    MODEL = "xai:grok-4.7" if XAI_API_KEY else (
+        "mistral:mistral-large-latest" if MISTRAL_API_KEY else (
+            "cloudflare:" + CLOUDFLARE_MODEL if CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID else (
+                "sambanova:Meta-Llama-3.3-70B-Instruct" if SAMBANOVA_API_KEY else (
+                    "openrouter:openrouter/free" if OPENROUTER_KEY else ""
+                )
+            )
+        )
+    )
 
 ALLOWED_USER_ID = int(ALLOWED_USER_ID)
 MAX_OUTPUT_TOKENS = max(256, min(MAX_OUTPUT_TOKENS, 8192))
@@ -1129,79 +1149,80 @@ async def execute_tool(name, args):
     raise ValueError("Неизвестный инструмент.")
 
 # =========================================================
-# OPENROUTER MODEL CATALOGUE
+# MULTI-PROVIDER MODEL CATALOGUE
 # =========================================================
 
 async def get_available_models(force_refresh=False):
-    """Fetch currently available OpenRouter models and expose 10 vendors."""
+    """Return configured direct-provider models plus OpenRouter models when enabled."""
     now = time.monotonic()
     cached = model_catalog_cache.get("models") or []
     if cached and not force_refresh and now - model_catalog_cache.get("updated", 0) < MODEL_CATALOG_TTL:
         return cached
 
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": WEB_APP_URL,
-        "X-Title": "Gubka GPT",
-    }
-
-    data = await request_json(
-        "GET",
-        "https://openrouter.ai/api/v1/models",
-        headers=headers,
-    )
-    raw_models = data.get("data") or []
-    grouped = {key: [] for key in MODEL_PROVIDERS}
-
-    for item in raw_models:
-        if not isinstance(item, dict):
-            continue
-        model_id = str(item.get("id") or "")
-        if "/" not in model_id:
-            continue
-        prefix = model_id.split("/", 1)[0]
-        if prefix not in grouped:
-            continue
-
-        architecture = item.get("architecture") or {}
-        modality = str(architecture.get("modality") or "")
-        if modality and "text" not in modality:
-            continue
-
-        supported = item.get("supported_parameters") or []
-        # The app relies on function calling for GitHub and Render tools.
-        # Exclude models that explicitly do not advertise tool support.
-        if supported and "tools" not in supported:
-            continue
-        pricing = item.get("pricing") or {}
-        prompt_price = str(pricing.get("prompt", ""))
-        completion_price = str(pricing.get("completion", ""))
-        is_free = prompt_price in ("0", "0.0", "0.000000") and completion_price in ("0", "0.0", "0.000000")
-
-        grouped[prefix].append({
-            "id": model_id,
-            "name": str(item.get("name") or model_id),
-            "provider": prefix,
-            "provider_name": MODEL_PROVIDERS[prefix],
-            "context_length": int(item.get("context_length") or 0),
-            "free": is_free,
-            "tools": "tools" in supported if supported else None,
-            "created": int(item.get("created") or 0),
-            "pricing": {
-                "prompt": prompt_price,
-                "completion": completion_price,
-            },
-        })
-
     result = []
-    for provider in MODEL_PROVIDERS:
-        items = grouped[provider]
-        items.sort(key=lambda m: (not m["free"], -m["created"], -m["context_length"]))
-        result.extend(items[:MODELS_PER_PROVIDER])
+    enabled = {
+        "xai": bool(XAI_API_KEY),
+        "mistral": bool(MISTRAL_API_KEY),
+        "cloudflare": bool(CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID),
+        "sambanova": bool(SAMBANOVA_API_KEY),
+    }
+    for provider, models in DIRECT_MODELS.items():
+        if not enabled.get(provider):
+            continue
+        for model_id, name in models:
+            result.append({
+                "id": f"{provider}:{model_id}",
+                "name": name,
+                "provider": provider,
+                "provider_name": MODEL_PROVIDERS[provider],
+                "context_length": 0,
+                "free": False,
+                "tools": True,
+                "created": 0,
+                "pricing": {"prompt": "", "completion": ""},
+            })
+
+    if OPENROUTER_KEY:
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": WEB_APP_URL,
+            "X-Title": "Gubka GPT",
+        }
+        try:
+            data = await request_json("GET", "https://openrouter.ai/api/v1/models", headers=headers)
+            for item in data.get("data") or []:
+                if not isinstance(item, dict):
+                    continue
+                model_id = str(item.get("id") or "")
+                supported = item.get("supported_parameters") or []
+                architecture = item.get("architecture") or {}
+                modality = str(architecture.get("modality") or "")
+                if not model_id or (modality and "text" not in modality):
+                    continue
+                if supported and "tools" not in supported:
+                    continue
+                pricing = item.get("pricing") or {}
+                prompt_price = str(pricing.get("prompt", ""))
+                completion_price = str(pricing.get("completion", ""))
+                prefix = model_id.split("/", 1)[0] if "/" in model_id else "openrouter"
+                result.append({
+                    "id": "openrouter:" + model_id,
+                    "name": str(item.get("name") or model_id),
+                    "provider": "openrouter",
+                    "provider_name": MODEL_PROVIDERS["openrouter"] + (" · " + prefix if prefix else ""),
+                    "context_length": int(item.get("context_length") or 0),
+                    "free": prompt_price in ("0", "0.0", "0.000000") and completion_price in ("0", "0.0", "0.000000"),
+                    "tools": "tools" in supported if supported else None,
+                    "created": int(item.get("created") or 0),
+                    "pricing": {"prompt": prompt_price, "completion": completion_price},
+                })
+        except Exception as exc:
+            if not result:
+                raise RuntimeError("Не удалось загрузить модели: " + str(exc)[:400])
 
     if not result:
-        raise RuntimeError("OpenRouter не вернул модели для выбранных провайдеров.")
+        raise RuntimeError("Нет доступных AI-провайдеров. Проверь ключи и Account ID Cloudflare.")
 
     model_catalog_cache["models"] = result
     model_catalog_cache["updated"] = now
@@ -1243,7 +1264,7 @@ async def api_select_model(request):
     available = await get_available_models()
     selected = next((m for m in available if m["id"] == model_id and m["provider"] == provider), None)
     if not selected:
-        raise web.HTTPBadRequest(text="Эта модель отсутствует в актуальном каталоге OpenRouter.")
+        raise web.HTTPBadRequest(text="Эта модель сейчас не подключена или отсутствует в каталоге.")
 
     uid = current_user_id(user)
     selected_models[uid] = model_id
@@ -1263,65 +1284,111 @@ def selected_model_for_user(uid):
 
 
 # =========================================================
-# OPENROUTER
+# AI PROVIDERS + AUTOMATIC FAILOVER
 # =========================================================
 
-async def openrouter(messages, tools=None, max_tokens=None):
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": WEB_APP_URL,
-        "X-Title": "Gubka GPT"
+async def _post_openai_compatible(url, api_key, model, messages, tools=None, max_tokens=None, auth_header="Bearer"):
+    headers = {"Authorization": f"{auth_header} {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.3,
+        "max_tokens": max_tokens or MAX_OUTPUT_TOKENS,
     }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    return await request_json("POST", url, headers=headers, payload=payload)
 
-    preferred_model = current_model_context.get() or MODEL
-    models = [preferred_model]
 
-    if preferred_model != "openrouter/free":
-        models.append("openrouter/free")
+async def _cloudflare_chat(model, messages, tools=None, max_tokens=None):
+    # Workers AI uses its own result envelope; normalize it to OpenAI chat-completion shape.
+    prompt_messages = []
+    for item in messages:
+        role = str(item.get("role") or "user")
+        content = item.get("content")
+        if isinstance(content, list):
+            content = "\n".join(part.get("text", "") for part in content if isinstance(part, dict))
+        if content is not None:
+            prompt_messages.append({"role": role, "content": str(content)})
+    payload = {
+        "messages": prompt_messages,
+        "max_tokens": max_tokens or MAX_OUTPUT_TOKENS,
+        "temperature": 0.3,
+    }
+    if tools:
+        payload["tools"] = [t.get("function", t) for t in tools]
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/run/{quote(model, safe='@/-_.')}"
+    data = await request_json("POST", url, headers={
+        "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+        "Content-Type": "application/json",
+    }, payload=payload)
+    result = data.get("result") or {}
+    text = result.get("response") or result.get("output_text") or ""
+    calls = result.get("tool_calls") or []
+    normalized_calls = []
+    for index, call in enumerate(calls):
+        name = call.get("name") or call.get("function", {}).get("name")
+        args = call.get("arguments") or call.get("function", {}).get("arguments") or {}
+        if isinstance(args, dict):
+            args = json.dumps(args, ensure_ascii=False)
+        normalized_calls.append({"id": call.get("id") or f"cf_{index}", "type": "function", "function": {"name": name, "arguments": args}})
+    return {"model": model, "choices": [{"message": {"role": "assistant", "content": text, **({"tool_calls": normalized_calls} if normalized_calls else {})}, "finish_reason": "tool_calls" if normalized_calls else "stop"}]}
 
-    last_error = None
 
-    for selected_model in models:
-        payload = {
-            "model": selected_model,
-            "messages": messages,
-            "temperature": 0.3,
-            "max_tokens": max_tokens or MAX_OUTPUT_TOKENS
-        }
+async def _call_provider(provider, model, messages, tools=None, max_tokens=None):
+    if provider == "xai":
+        return await _post_openai_compatible("https://api.x.ai/v1/chat/completions", XAI_API_KEY, model, messages, tools, max_tokens)
+    if provider == "mistral":
+        return await _post_openai_compatible("https://api.mistral.ai/v1/chat/completions", MISTRAL_API_KEY, model, messages, tools, max_tokens)
+    if provider == "sambanova":
+        return await _post_openai_compatible("https://api.sambanova.ai/v1/chat/completions", SAMBANOVA_API_KEY, model, messages, tools, max_tokens)
+    if provider == "cloudflare":
+        return await _cloudflare_chat(model, messages, tools, max_tokens)
+    if provider == "openrouter":
+        return await _post_openai_compatible("https://openrouter.ai/api/v1/chat/completions", OPENROUTER_KEY, model, messages, tools, max_tokens)
+    raise RuntimeError("Неизвестный AI-провайдер: " + provider)
 
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
 
+async def openrouter(messages, tools=None, max_tokens=None):
+    """Legacy function name retained for compatibility; now routes across all providers."""
+    selected = current_model_context.get() or MODEL
+    if ":" in selected:
+        preferred_provider, preferred_model = selected.split(":", 1)
+    else:
+        preferred_provider, preferred_model = "openrouter", selected
+
+    configured = []
+    if XAI_API_KEY:
+        configured.append(("xai", "grok-4.7"))
+    if MISTRAL_API_KEY:
+        configured.append(("mistral", "mistral-large-latest"))
+    if CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID:
+        configured.append(("cloudflare", CLOUDFLARE_MODEL))
+    if SAMBANOVA_API_KEY:
+        configured.append(("sambanova", "Meta-Llama-3.3-70B-Instruct"))
+    if OPENROUTER_KEY:
+        configured.append(("openrouter", preferred_model if preferred_provider == "openrouter" else os.getenv("OPENROUTER_MODEL", "openrouter/free").strip()))
+
+    ordered = []
+    if any(p == preferred_provider for p, _ in configured):
+        ordered.append((preferred_provider, preferred_model))
+    ordered.extend((p, m) for p, m in configured if p != preferred_provider)
+
+    errors = []
+    for provider, model in ordered:
         try:
-            data = await request_json(
-                "POST",
-                OPENROUTER_API,
-                headers=headers,
-                payload=payload
-            )
-
+            data = await _call_provider(provider, model, messages, tools, max_tokens)
             choices = data.get("choices") or []
-
             if not choices:
-                raise RuntimeError(
-                    "OpenRouter не вернул ответ."
-                )
-
-            last_model_context.set(
-                data.get("model") or selected_model
-            )
-
+                raise RuntimeError("Провайдер вернул пустой ответ.")
+            last_model_context.set(f"{provider}:{data.get('model') or model}")
             return choices[0]
-
         except Exception as exc:
-            last_error = exc
+            errors.append(f"{provider}: {str(exc)[:260]}")
+            continue
 
-    raise RuntimeError(
-        "Не удалось получить ответ от OpenRouter: "
-        + str(last_error)[:700]
-    )
+    raise RuntimeError("Все подключённые AI-провайдеры не ответили. " + " | ".join(errors)[:1200])
 
 
 def message_text(msg):
