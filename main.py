@@ -41,6 +41,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "").strip()
+EXPLABS_API_KEY = (os.getenv("EXPLABS_API_KEY", "") or os.getenv("EXPERIENTIAL_LABS_API_KEY", "")).strip()
+EXPLABS_BASE_URL = os.getenv("EXPLABS_BASE_URL", "https://api.experientiallabs.ai/v1").strip().rstrip("/")
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
@@ -128,12 +130,11 @@ if not any([
     GEMINI_API_KEY,
     DEEPSEEK_API_KEY,
     GROQ_API_KEY,
-    SILICONFLOW_API_KEY
+    SILICONFLOW_API_KEY,
+    EXPLABS_API_KEY
 ]):
     raise RuntimeError(
-        "Не задан ни один AI API key. Добавь хотя бы один из: "
-        "GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY, "
-        "SILICONFLOW_API_KEY."
+        "Не задан ни один AI API key. Добавь хотя бы один ключ провайдера."
     )
 
 ALLOWED_USER_ID = int(ALLOWED_USER_ID)
@@ -191,6 +192,12 @@ last_model_context = contextvars.ContextVar(
     "gubka_last_model_context",
     default="AI provider"
 )
+
+selected_ai_context = contextvars.ContextVar(
+    "gubka_selected_ai_context",
+    default=None
+)
+selected_web_models = {}
 
 # =========================================================
 # AI SYSTEM
@@ -1378,10 +1385,12 @@ async def provider_completion(
 
     payload = {
         "model": config["model"],
-        "messages": messages,
-        "temperature": 0.3,
-        "max_tokens": max_tokens or MAX_OUTPUT_TOKENS
+        "messages": messages
     }
+
+    if provider != "experlabs":
+        payload["temperature"] = 0.3
+        payload["max_tokens"] = max_tokens or MAX_OUTPUT_TOKENS
 
     if tools:
         payload["tools"] = tools
@@ -1451,7 +1460,11 @@ async def request_ai_completion(
     tools=None,
     max_tokens=None
 ):
-    providers = configured_ai_providers()
+    selected = selected_ai_context.get()
+    providers = (
+        [(selected["provider"], selected["config"])]
+        if selected else configured_ai_providers()
+    )
 
     if not providers:
         raise RuntimeError(
@@ -1751,18 +1764,99 @@ async def health(request):
         "service": "Gubka GPT",
         "model": (
             f"{providers[0][0]} / {providers[0][1]['model']}"
-            if providers
-            else "not configured"
+            if providers else "not configured"
         ),
         "providers": [
-            {
-                "name": name,
-                "model": config["model"]
-            }
+            {"name": name, "model": config["model"]}
             for name, config in providers
         ],
         "render_connected": bool(RENDER_API_KEY)
     })
+
+# =========================================================
+# MODEL SELECTION
+# =========================================================
+
+async def available_web_models():
+    models = []
+
+    for name, config in configured_ai_providers():
+        models.append({
+            "id": config["model"],
+            "name": config["model"],
+            "provider": name,
+            "base_url": config["base_url"],
+            "key": config["key"]
+        })
+
+    if EXPLABS_API_KEY:
+        try:
+            async with get_session().get(
+                EXPLABS_BASE_URL + "/models",
+                headers={"Authorization": f"Bearer {EXPLABS_API_KEY}"}
+            ) as response:
+                raw = await response.text()
+                if response.status < 400:
+                    data = json.loads(raw) if raw else {}
+                    for item in data.get("data", []):
+                        model_id = item.get("id") if isinstance(item, dict) else None
+                        if model_id:
+                            models.append({
+                                "id": model_id,
+                                "name": model_id,
+                                "provider": "experlabs",
+                                "base_url": EXPLABS_BASE_URL,
+                                "key": EXPLABS_API_KEY
+                            })
+                else:
+                    print("Experiential Labs models API:", response.status, raw[:300])
+        except Exception as exc:
+            print("Experiential Labs models list unavailable:", str(exc)[:300])
+
+    unique = {}
+    for item in models:
+        unique[(item["provider"], item["id"])] = item
+    return list(unique.values())
+
+
+async def api_models(request):
+    web_user(request)
+    models = await available_web_models()
+    return web.json_response({
+        "ok": True,
+        "models": [
+            {"id": item["id"], "name": item["name"], "provider": item["provider"]}
+            for item in models
+        ]
+    })
+
+
+async def api_select_model(request):
+    user = web_user(request)
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="Некорректный JSON.")
+
+    model_id = str(body.get("model", "")).strip()
+    provider = str(body.get("provider", "")).strip()
+    if not model_id or not provider:
+        raise web.HTTPBadRequest(text="Не выбрана модель.")
+
+    models = await available_web_models()
+    selected = next((item for item in models if item["id"] == model_id and item["provider"] == provider), None)
+    if not selected:
+        raise web.HTTPBadRequest(text="Эта модель недоступна или не настроена.")
+
+    selected_web_models[current_user_id(user)] = {
+        "provider": selected["provider"],
+        "config": {
+            "key": selected["key"],
+            "base_url": selected["base_url"],
+            "model": selected["id"]
+        }
+    }
+    return web.json_response({"ok": True, "model": model_id, "provider": provider})
 
 # =========================================================
 # WEB API
@@ -1777,6 +1871,11 @@ async def api_me(request):
     )
 
     providers = configured_ai_providers()
+    selected = selected_web_models.get(current_user_id(user))
+    selected_label = (
+        f"{selected['provider']} / {selected['config']['model']}"
+        if selected else None
+    )
 
     return web.json_response({
         "ok": True,
@@ -1789,11 +1888,12 @@ async def api_me(request):
             "login": user.get("login"),
             "provider": provider
         },
-        "model": (
+        "model": selected_label or (
             f"{providers[0][0]} / {providers[0][1]['model']}"
-            if providers
-            else "not configured"
+            if providers else "not configured"
         ),
+        "selected_model": selected["config"]["model"] if selected else None,
+        "selected_provider": selected["provider"] if selected else None,
         "providers": [
             {
                 "name": name,
@@ -1970,17 +2070,22 @@ async def api_chat(request):
     async with lock_for(key):
         history = web_histories.get(key, [])
 
-        answer = await ask_ai([
-            {
-                "role": "system",
-                "content": CHAT_SYSTEM
-            },
-            *history,
-            {
-                "role": "user",
-                "content": text
-            }
-        ])
+        selected = selected_web_models.get(uid)
+        selection_token = selected_ai_context.set(selected)
+        try:
+            answer = await ask_ai([
+                {
+                    "role": "system",
+                    "content": CHAT_SYSTEM
+                },
+                *history,
+                {
+                    "role": "user",
+                    "content": text
+                }
+            ])
+        finally:
+            selected_ai_context.reset(selection_token)
 
         used_model = last_model_context.get()
 
@@ -2563,6 +2668,8 @@ async def start_web_server():
     app.router.add_get("/health", health)
 
     app.router.add_get("/api/me", api_me)
+    app.router.add_get("/api/models", api_models)
+    app.router.add_post("/api/select-model", api_select_model)
     app.router.add_get("/api/history", api_history)
     app.router.add_get("/api/repos", api_repos)
 
