@@ -36,10 +36,11 @@ from oauth_auth import (
 # =========================================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
-OPENROUTER_KEY = os.getenv("OPENROUTER_KEY", "").strip()
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
 
@@ -50,20 +51,34 @@ GITHUB_REPO = os.getenv(
 ).strip().strip("/")
 
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip()
-MODEL = os.getenv(
-    "OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it:free"
+
+GEMINI_BASE_URL = os.getenv(
+    "GEMINI_BASE_URL",
+    "https://generativelanguage.googleapis.com/v1beta/openai"
+).strip().rstrip("/")
+
+GEMINI_MODEL = os.getenv(
+    "GEMINI_MODEL", "gemini-2.5-flash"
 ).strip()
-GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai").strip().rstrip("/")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip().rstrip("/")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash").strip()
-GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1").strip().rstrip("/")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
-AI_PROVIDER_ORDER = [
-    item.strip().lower()
-    for item in os.getenv("AI_PROVIDER_ORDER", "openrouter,gemini,deepseek,groq").split(",")
-    if item.strip()
-]
+
+DEEPSEEK_BASE_URL = os.getenv(
+    "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
+).strip().rstrip("/")
+
+DEEPSEEK_MODEL = os.getenv(
+    "DEEPSEEK_MODEL", "deepseek-chat"
+).strip()
+
+GROQ_BASE_URL = os.getenv(
+    "GROQ_BASE_URL", "https://api.groq.com/openai/v1"
+).strip().rstrip("/")
+
+GROQ_MODEL = os.getenv(
+    "GROQ_MODEL", "llama-3.3-70b-versatile"
+).strip()
+
+# Порядок переключения провайдеров.
+AI_PROVIDER_ORDER = ["gemini", "deepseek", "groq"]
 
 WEB_APP_URL = os.getenv(
     "WEB_APP_URL", "https://gubka-gpt.onrender.com"
@@ -81,7 +96,6 @@ MAX_MESSAGE_LENGTH = 12000
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=120)
 
 GITHUB_API = "https://api.github.com"
-OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
 RENDER_API = "https://api.render.com/v1"
 
 for key, value in {
@@ -90,19 +104,33 @@ for key, value in {
     "ALLOWED_USER_ID": ALLOWED_USER_ID,
 }.items():
     if not value:
-        raise RuntimeError(f"Не задана переменная Render: {key}")
+        raise RuntimeError(
+            f"Не задана переменная Render: {key}"
+        )
 
-if not any([OPENROUTER_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY]):
+if not any([
+    GEMINI_API_KEY,
+    DEEPSEEK_API_KEY,
+    GROQ_API_KEY
+]):
     raise RuntimeError(
         "Не задан ни один AI API key. Добавь хотя бы один из: "
-        "OPENROUTER_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY."
+        "GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY."
     )
 
 ALLOWED_USER_ID = int(ALLOWED_USER_ID)
-MAX_OUTPUT_TOKENS = max(256, min(MAX_OUTPUT_TOKENS, 8192))
+MAX_OUTPUT_TOKENS = max(
+    256,
+    min(MAX_OUTPUT_TOKENS, 8192)
+)
 
-if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", GITHUB_REPO):
-    raise RuntimeError("GITHUB_REPO должен иметь формат owner/repository")
+if not re.fullmatch(
+    r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
+    GITHUB_REPO
+):
+    raise RuntimeError(
+        "GITHUB_REPO должен иметь формат owner/repository"
+    )
 
 # =========================================================
 # APP
@@ -121,13 +149,29 @@ pending = {}
 
 started_at = datetime.now(timezone.utc)
 
-repo_context = contextvars.ContextVar("gubka_repo_context", default=None)
-branch_context = contextvars.ContextVar("gubka_branch_context", default=None)
-web_request_context = contextvars.ContextVar("gubka_web_request_context", default=False)
-github_session_context = contextvars.ContextVar("gubka_github_session", default=None)
+repo_context = contextvars.ContextVar(
+    "gubka_repo_context",
+    default=None
+)
+
+branch_context = contextvars.ContextVar(
+    "gubka_branch_context",
+    default=None
+)
+
+web_request_context = contextvars.ContextVar(
+    "gubka_web_request_context",
+    default=False
+)
+
+github_session_context = contextvars.ContextVar(
+    "gubka_github_session",
+    default=None
+)
+
 last_model_context = contextvars.ContextVar(
     "gubka_last_model_context",
-    default=f"OpenRouter / {MODEL}" if OPENROUTER_KEY else "AI provider"
+    default="AI provider"
 )
 
 # =========================================================
@@ -200,8 +244,6 @@ def tool(name, description, properties=None, required=None):
 
 
 AI_TOOLS = [
-    # ---------------- GITHUB ----------------
-
     tool(
         "github_repo_info",
         "Получить информацию о текущем репозитории."
@@ -255,8 +297,6 @@ AI_TOOLS = [
         },
         ["path", "content"]
     ),
-
-    # ---------------- RENDER ----------------
 
     tool(
         "render_list_services",
@@ -320,14 +360,20 @@ AI_TOOLS = [
 def lock_for(key):
     if key not in locks:
         locks[key] = asyncio.Lock()
+
     return locks[key]
 
 
 def safe_chat_id(value):
     value = str(value or "").strip()
 
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", value):
-        raise web.HTTPBadRequest(text="Некорректный ID чата.")
+    if not re.fullmatch(
+        r"[A-Za-z0-9_-]{1,80}",
+        value
+    ):
+        raise web.HTTPBadRequest(
+            text="Некорректный ID чата."
+        )
 
     return value
 
@@ -347,8 +393,11 @@ def safe_path(path):
         raise ValueError("Некорректный путь.")
 
     forbidden = {
-        ".git", "__pycache__", ".venv",
-        "venv", "node_modules"
+        ".git",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "node_modules"
     }
 
     for part in parts:
@@ -360,9 +409,14 @@ def safe_path(path):
             or low.startswith(".env.")
             or low.endswith(".pem")
             or low.endswith(".key")
-            or low in {"secrets.json", "credentials.json"}
+            or low in {
+                "secrets.json",
+                "credentials.json"
+            }
         ):
-            raise ValueError("Доступ к этому файлу запрещён.")
+            raise ValueError(
+                "Доступ к этому файлу запрещён."
+            )
 
     if len(path) > 240:
         raise ValueError("Слишком длинный путь.")
@@ -372,20 +426,32 @@ def safe_path(path):
 
 def remember(uid, role, content):
     items = histories.setdefault(uid, [])
-    items.append({"role": role, "content": content})
+
+    items.append({
+        "role": role,
+        "content": content
+    })
+
     histories[uid] = items[-MAX_HISTORY_MESSAGES:]
 
 
 def remember_web(uid, chat_id, role, content):
     key = (uid, chat_id)
     items = web_histories.setdefault(key, [])
-    items.append({"role": role, "content": content})
+
+    items.append({
+        "role": role,
+        "content": content
+    })
+
     web_histories[key] = items[-MAX_HISTORY_MESSAGES:]
 
 
 def get_session():
     if session is None or session.closed:
-        raise RuntimeError("HTTP-сессия ещё не запущена.")
+        raise RuntimeError(
+            "HTTP-сессия ещё не запущена."
+        )
 
     return session
 
@@ -409,10 +475,14 @@ def current_user_id(user):
 def ensure_github_authorized():
     if web_request_context.get():
         if not github_token_for_request():
-            raise RuntimeError("Сначала войди через GitHub.")
+            raise RuntimeError(
+                "Сначала войди через GitHub."
+            )
 
     elif not GITHUB_TOKEN:
-        raise RuntimeError("Не настроен GitHub Token.")
+        raise RuntimeError(
+            "Не настроен GitHub Token."
+        )
 
 
 def ensure_render_authorized():
@@ -490,11 +560,17 @@ async def github_request(
 
 
 async def github_info():
-    data = await github_request("GET", repo_path())
+    data = await github_request(
+        "GET",
+        repo_path()
+    )
 
     branch = await github_request(
         "GET",
-        repo_path("/branches/" + quote(current_branch(), safe=""))
+        repo_path(
+            "/branches/"
+            + quote(current_branch(), safe="")
+        )
     )
 
     commit = branch.get("commit", {})
@@ -515,7 +591,8 @@ async def github_tree():
     ref = await github_request(
         "GET",
         repo_path(
-            "/git/ref/heads/" + quote(current_branch(), safe="/")
+            "/git/ref/heads/"
+            + quote(current_branch(), safe="/")
         )
     )
 
@@ -528,7 +605,9 @@ async def github_tree():
 
     tree = await github_request(
         "GET",
-        repo_path(f"/git/trees/{commit['tree']['sha']}"),
+        repo_path(
+            f"/git/trees/{commit['tree']['sha']}"
+        ),
         params={"recursive": "1"}
     )
 
@@ -538,7 +617,11 @@ async def github_tree():
         if item.get("type") == "blob"
     ]
 
-    return files, tree.get("truncated", False), sha
+    return (
+        files,
+        tree.get("truncated", False),
+        sha
+    )
 
 
 async def github_read(path):
@@ -546,25 +629,34 @@ async def github_read(path):
 
     data = await github_request(
         "GET",
-        repo_path("/contents/" + quote(path, safe="/")),
+        repo_path(
+            "/contents/"
+            + quote(path, safe="/")
+        ),
         params={"ref": current_branch()}
     )
 
     if data.get("type") != "file":
-        raise RuntimeError("Это не обычный файл.")
+        raise RuntimeError(
+            "Это не обычный файл."
+        )
 
     raw = base64.b64decode(
         data.get("content", "").replace("\n", "")
     )
 
     if len(raw) > MAX_FILE_BYTES:
-        raise RuntimeError("Файл превышает лимит 100 КБ.")
+        raise RuntimeError(
+            "Файл превышает лимит 100 КБ."
+        )
 
     try:
         content = raw.decode("utf-8")
 
     except UnicodeDecodeError:
-        raise RuntimeError("Файл не является UTF-8 текстом.")
+        raise RuntimeError(
+            "Файл не является UTF-8 текстом."
+        )
 
     return content, data.get("sha")
 
@@ -581,7 +673,9 @@ async def github_list_user_repos():
     )
 
     if not isinstance(data, list):
-        raise RuntimeError("GitHub вернул некорректный список.")
+        raise RuntimeError(
+            "GitHub вернул некорректный список."
+        )
 
     return [
         {
@@ -601,8 +695,13 @@ async def github_create_repository(
     description="",
     private=True
 ):
-    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", name):
-        raise ValueError("Некорректное название репозитория.")
+    if not re.fullmatch(
+        r"[A-Za-z0-9_.-]{1,100}",
+        name
+    ):
+        raise ValueError(
+            "Некорректное название репозитория."
+        )
 
     data = await github_request(
         "POST",
@@ -631,7 +730,9 @@ async def github_write_file(
     path = safe_path(path)
 
     if not isinstance(content, str):
-        raise ValueError("Содержимое файла должно быть текстом.")
+        raise ValueError(
+            "Содержимое файла должно быть текстом."
+        )
 
     if "\x00" in content:
         raise ValueError(
@@ -641,7 +742,9 @@ async def github_write_file(
     raw = content.encode("utf-8")
 
     if len(raw) > MAX_FILE_BYTES:
-        raise ValueError("Файл превышает лимит 100 КБ.")
+        raise ValueError(
+            "Файл превышает лимит 100 КБ."
+        )
 
     old_sha = None
 
@@ -653,7 +756,10 @@ async def github_write_file(
             raise
 
     payload = {
-        "message": str(message)[:180] or "Gubka GPT: обновление файла",
+        "message": (
+            str(message)[:180]
+            or "Gubka GPT: обновление файла"
+        ),
         "content": base64.b64encode(raw).decode("ascii"),
         "branch": current_branch()
     }
@@ -663,7 +769,10 @@ async def github_write_file(
 
     result = await github_request(
         "PUT",
-        repo_path("/contents/" + quote(path, safe="/")),
+        repo_path(
+            "/contents/"
+            + quote(path, safe="/")
+        ),
         payload=payload
     )
 
@@ -688,13 +797,18 @@ async def github_write_file(
     }
 
 
-async def github_select_repository(repository, branch=""):
+async def github_select_repository(
+    repository,
+    branch=""
+):
     repos = await github_list_user_repos()
 
     selected = next(
         (
             item for item in repos
-            if (item.get("full_name") or "").lower() == repository.lower()
+            if (
+                item.get("full_name") or ""
+            ).lower() == repository.lower()
         ),
         None
     )
@@ -704,10 +818,19 @@ async def github_select_repository(repository, branch=""):
             "Репозиторий не найден среди доступных."
         )
 
-    branch = branch or selected.get("default_branch") or "main"
+    branch = (
+        branch
+        or selected.get("default_branch")
+        or "main"
+    )
 
-    if not re.fullmatch(r"[A-Za-z0-9_./-]{1,150}", branch):
-        raise ValueError("Некорректное название ветки.")
+    if not re.fullmatch(
+        r"[A-Za-z0-9_./-]{1,150}",
+        branch
+    ):
+        raise ValueError(
+            "Некорректное название ветки."
+        )
 
     await github_request(
         "GET",
@@ -803,8 +926,13 @@ async def render_list_services():
 async def render_get_service(service_id):
     service_id = str(service_id or "").strip()
 
-    if not re.fullmatch(r"[A-Za-z0-9_-]{5,100}", service_id):
-        raise ValueError("Некорректный ID сервиса Render.")
+    if not re.fullmatch(
+        r"[A-Za-z0-9_-]{5,100}",
+        service_id
+    ):
+        raise ValueError(
+            "Некорректный ID сервиса Render."
+        )
 
     services = await render_list_services()
 
@@ -824,10 +952,16 @@ async def render_get_service(service_id):
     return service
 
 
-async def render_list_deploys(service_id, limit=10):
+async def render_list_deploys(
+    service_id,
+    limit=10
+):
     service = await render_get_service(service_id)
 
-    limit = max(1, min(int(limit or 10), 30))
+    limit = max(
+        1,
+        min(int(limit or 10), 30)
+    )
 
     data = await render_request(
         "GET",
@@ -878,6 +1012,7 @@ async def render_service_status(service_id):
     )
 
     service = result["service"]
+
     latest = (
         result["deploys"][0]
         if result["deploys"]
@@ -904,8 +1039,15 @@ async def render_get_logs(
             "Render не вернул ID рабочего пространства."
         )
 
-    minutes = max(1, min(int(minutes or 60), 1440))
-    limit = max(1, min(int(limit or 50), 100))
+    minutes = max(
+        1,
+        min(int(minutes or 60), 1440)
+    )
+
+    limit = max(
+        1,
+        min(int(limit or 50), 100)
+    )
 
     end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(minutes=minutes)
@@ -960,7 +1102,9 @@ async def render_deploy_service(
 
     payload = {
         "clearCache": (
-            "clear" if clear_cache else "do_not_clear"
+            "clear"
+            if clear_cache
+            else "do_not_clear"
         ),
         "deployMode": "build_and_deploy"
     }
@@ -985,8 +1129,6 @@ async def render_deploy_service(
 # =========================================================
 
 async def execute_tool(name, args):
-    # ---------------- RENDER ----------------
-
     if name.startswith("render_"):
         ensure_render_authorized()
 
@@ -1050,9 +1192,9 @@ async def execute_tool(name, args):
                 ensure_ascii=False
             )
 
-        raise ValueError("Неизвестный инструмент Render.")
-
-    # ---------------- GITHUB ----------------
+        raise ValueError(
+            "Неизвестный инструмент Render."
+        )
 
     ensure_github_authorized()
 
@@ -1130,14 +1272,22 @@ async def execute_tool(name, args):
             ensure_ascii=False
         )
 
-    raise ValueError("Неизвестный инструмент.")
+    raise ValueError(
+        "Неизвестный инструмент."
+    )
 
 # =========================================================
-# OPENROUTER
+# AI PROVIDERS: GEMINI / DEEPSEEK / GROQ
 # =========================================================
 
 class AIProviderError(RuntimeError):
-    def __init__(self, provider, message, status=None, retryable=False):
+    def __init__(
+        self,
+        provider,
+        message,
+        status=None,
+        retryable=True
+    ):
         super().__init__(message)
         self.provider = provider
         self.status = status
@@ -1146,128 +1296,171 @@ class AIProviderError(RuntimeError):
 
 def configured_ai_providers():
     configs = {
-        "openrouter": {"key": OPENROUTER_KEY, "base_url": "https://openrouter.ai/api/v1", "model": MODEL},
-        "gemini": {"key": GEMINI_API_KEY, "base_url": GEMINI_BASE_URL, "model": GEMINI_MODEL},
-        "deepseek": {"key": DEEPSEEK_API_KEY, "base_url": DEEPSEEK_BASE_URL, "model": DEEPSEEK_MODEL},
-        "groq": {"key": GROQ_API_KEY, "base_url": GROQ_BASE_URL, "model": GROQ_MODEL},
+        "gemini": {
+            "key": GEMINI_API_KEY,
+            "base_url": GEMINI_BASE_URL,
+            "model": GEMINI_MODEL
+        },
+        "deepseek": {
+            "key": DEEPSEEK_API_KEY,
+            "base_url": DEEPSEEK_BASE_URL,
+            "model": DEEPSEEK_MODEL
+        },
+        "groq": {
+            "key": GROQ_API_KEY,
+            "base_url": GROQ_BASE_URL,
+            "model": GROQ_MODEL
+        }
     }
-    ordered, seen = [], set()
-    for name in AI_PROVIDER_ORDER:
-        if name in configs and name not in seen:
-            seen.add(name)
-            if configs[name]["key"]:
-                ordered.append((name, configs[name]))
-    for name, config in configs.items():
-        if name not in seen and config["key"]:
-            ordered.append((name, config))
-    return ordered
+
+    return [
+        (name, configs[name])
+        for name in AI_PROVIDER_ORDER
+        if name in configs and configs[name]["key"]
+    ]
 
 
-def classify_provider_error(provider, status, body):
-    lowered = str(body).lower()
-    if provider == "openrouter" and status == 429 and any(
-        marker in lowered for marker in (
-            "free-models-per-day", "free models per day",
-            "daily limit", "daily quota", "requests per day"
-        )
-    ):
-        return AIProviderError(
-            provider,
-            "OpenRouter исчерпал общий дневной лимит API-ключа. "
-            "Смена модели внутри OpenRouter этот лимит не сбрасывает.",
-            status, False
-        )
-    if status in (408, 409, 425, 429) or status >= 500:
-        return AIProviderError(
-            provider, f"Временная ошибка {provider} (HTTP {status}): {str(body)[:700]}",
-            status, True
-        )
+def classify_provider_error(
+    provider,
+    status,
+    body
+):
     return AIProviderError(
-        provider, f"Ошибка {provider} (HTTP {status}): {str(body)[:700]}",
-        status, False
+        provider,
+        (
+            f"Ошибка {provider} "
+            f"(HTTP {status}): {str(body)[:700]}"
+        ),
+        status,
+        True
     )
 
 
-async def provider_completion(provider, config, messages, tools=None, max_tokens=None):
-    endpoint = config["base_url"].rstrip("/") + "/chat/completions"
-    headers = {"Authorization": f"Bearer {config['key']}", "Content-Type": "application/json"}
-    if provider == "openrouter":
-        headers["HTTP-Referer"] = WEB_APP_URL
-        headers["X-Title"] = "Gubka GPT"
+async def provider_completion(
+    provider,
+    config,
+    messages,
+    tools=None,
+    max_tokens=None
+):
+    endpoint = (
+        config["base_url"].rstrip("/")
+        + "/chat/completions"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {config['key']}",
+        "Content-Type": "application/json"
+    }
 
     payload = {
         "model": config["model"],
         "messages": messages,
         "temperature": 0.3,
-        "max_tokens": max_tokens or MAX_OUTPUT_TOKENS,
+        "max_tokens": max_tokens or MAX_OUTPUT_TOKENS
     }
+
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
-    if provider == "deepseek":
-        payload["thinking"] = {"type": "disabled"}
 
-    models = [config["model"]]
-    if provider == "openrouter" and config["model"] != "openrouter/free":
-        models.append("openrouter/free")
+    try:
+        async with get_session().post(
+            endpoint,
+            headers=headers,
+            json=payload
+        ) as response:
 
-    last_error = None
-    for model in models:
-        payload["model"] = model
-        try:
-            async with get_session().post(endpoint, headers=headers, json=payload) as response:
-                raw = await response.text()
-                if response.status >= 400:
-                    error = classify_provider_error(provider, response.status, raw)
-                    if provider == "openrouter" and error.retryable and model != models[-1]:
-                        last_error = error
-                        continue
-                    raise error
-                try:
-                    data = json.loads(raw) if raw else {}
-                except json.JSONDecodeError:
-                    raise AIProviderError(provider, f"{provider}: сервер вернул некорректный JSON.", retryable=True)
+            raw = await response.text()
 
-            choices = data.get("choices") or []
-            if not choices:
-                raise AIProviderError(provider, f"{provider}: API не вернул choices.", retryable=True)
-            last_model_context.set(f"{provider.capitalize()} / {data.get('model') or model}")
-            return choices[0]
-        except AIProviderError:
-            raise
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            raise AIProviderError(provider, f"Сетевая ошибка {provider}: {str(exc)[:500]}", retryable=True)
-        except Exception as exc:
-            raise AIProviderError(provider, f"Неожиданная ошибка {provider}: {str(exc)[:500]}", retryable=True)
+            if response.status >= 400:
+                raise classify_provider_error(
+                    provider,
+                    response.status,
+                    raw
+                )
 
-    if last_error:
-        raise last_error
-    raise AIProviderError(provider, f"{provider}: не удалось получить ответ.", retryable=True)
+            try:
+                data = json.loads(raw) if raw else {}
+
+            except json.JSONDecodeError:
+                raise AIProviderError(
+                    provider,
+                    f"{provider}: сервер вернул некорректный JSON."
+                )
+
+        choices = data.get("choices") or []
+
+        if not choices:
+            raise AIProviderError(
+                provider,
+                f"{provider}: API не вернул choices."
+            )
+
+        last_model_context.set(
+            f"{provider.capitalize()} / "
+            f"{data.get('model') or config['model']}"
+        )
+
+        return choices[0]
+
+    except AIProviderError:
+        raise
+
+    except (
+        aiohttp.ClientError,
+        asyncio.TimeoutError
+    ) as exc:
+        raise AIProviderError(
+            provider,
+            f"Сетевая ошибка {provider}: {str(exc)[:500]}"
+        )
+
+    except Exception as exc:
+        raise AIProviderError(
+            provider,
+            f"Неожиданная ошибка {provider}: {str(exc)[:500]}"
+        )
 
 
-async def openrouter(messages, tools=None, max_tokens=None):
-    """Compatibility wrapper retained for existing internal callers."""
-    if not OPENROUTER_KEY:
-        raise AIProviderError("openrouter", "OpenRouter не настроен: отсутствует OPENROUTER_KEY.", retryable=False)
-    config = {"key": OPENROUTER_KEY, "base_url": "https://openrouter.ai/api/v1", "model": MODEL}
-    return await provider_completion("openrouter", config, messages, tools, max_tokens)
-
-
-async def request_ai_completion(messages, tools=None, max_tokens=None):
+async def request_ai_completion(
+    messages,
+    tools=None,
+    max_tokens=None
+):
     providers = configured_ai_providers()
+
     if not providers:
-        raise RuntimeError("Нет настроенных AI-провайдеров. Добавь хотя бы один API key.")
+        raise RuntimeError(
+            "Нет настроенных AI-провайдеров. "
+            "Добавь хотя бы один API key."
+        )
+
     errors = []
-    for index, (provider, config) in enumerate(providers):
+
+    for provider, config in providers:
         try:
-            return await provider_completion(provider, config, messages, tools, max_tokens)
+            return await provider_completion(
+                provider,
+                config,
+                messages,
+                tools,
+                max_tokens
+            )
+
         except AIProviderError as exc:
-            errors.append(str(exc))
-            if not exc.retryable:
-                raise RuntimeError(str(exc))
-            if index == len(providers) - 1:
-                break
-    raise RuntimeError("Все настроенные ИИ-провайдеры временно недоступны.\n" + "\n".join(errors[-4:]))
+            errors.append(
+                f"{provider}: {str(exc)}"
+            )
+
+            # При любой ошибке пробуем следующего провайдера.
+            continue
+
+    raise RuntimeError(
+        "Все настроенные ИИ-провайдеры недоступны.\n"
+        + "\n".join(errors[-4:])
+    )
+
 
 def message_text(msg):
     content = msg.get("content")
@@ -1456,10 +1649,14 @@ def web_user(request):
 # =========================================================
 
 @web.middleware
-async def request_context_middleware(request, handler):
+async def request_context_middleware(
+    request,
+    handler
+):
     tokens = []
 
     web_token = web_request_context.set(True)
+
     tokens.append((
         web_request_context,
         web_token
@@ -1473,7 +1670,9 @@ async def request_context_middleware(request, handler):
     record = sessions.get(session_id)
 
     if record:
-        session_token = github_session_context.set(record)
+        session_token = github_session_context.set(
+            record
+        )
 
         tokens.append((
             github_session_context,
@@ -1522,13 +1721,23 @@ async def index(request):
 
 
 async def health(request):
+    providers = configured_ai_providers()
+
     return web.json_response({
         "status": "ok",
         "service": "Gubka GPT",
         "model": (
-            f"{configured_ai_providers()[0][0]} / {configured_ai_providers()[0][1]['model']}"
-            if configured_ai_providers() else "not configured"
+            f"{providers[0][0]} / {providers[0][1]['model']}"
+            if providers
+            else "not configured"
         ),
+        "providers": [
+            {
+                "name": name,
+                "model": config["model"]
+            }
+            for name, config in providers
+        ],
         "render_connected": bool(RENDER_API_KEY)
     })
 
@@ -1544,6 +1753,8 @@ async def api_me(request):
         request.cookies.get("gubka_session", "")
     )
 
+    providers = configured_ai_providers()
+
     return web.json_response({
         "ok": True,
         "user": {
@@ -1556,12 +1767,21 @@ async def api_me(request):
             "provider": provider
         },
         "model": (
-            f"{configured_ai_providers()[0][0]} / {configured_ai_providers()[0][1]['model']}"
-            if configured_ai_providers() else "not configured"
+            f"{providers[0][0]} / {providers[0][1]['model']}"
+            if providers
+            else "not configured"
         ),
+        "providers": [
+            {
+                "name": name,
+                "model": config["model"]
+            }
+            for name, config in providers
+        ],
         "repo": (
             record.get("selected_repo")
-            if record else None
+            if record
+            else None
         ),
         "github_connected": provider == "github",
         "render_connected": bool(RENDER_API_KEY)
@@ -1949,7 +2169,8 @@ async def api_prepare(request):
 Не более 5 файлов.
 """
 
-    choice = await openrouter([
+    # Используем общую систему Gemini -> DeepSeek -> Groq.
+    choice = await request_ai_completion([
         {
             "role": "system",
             "content": "Ты опытный разработчик. Выдавай полные файлы."
@@ -2306,7 +2527,6 @@ async def start_web_server():
         client_max_size=2 * 1024 * 1024
     )
 
-    # Сначала регистрируем middleware.
     app.middlewares.append(
         request_context_middleware
     )
@@ -2370,7 +2590,9 @@ async def authorized(message):
         or message.from_user.id != ALLOWED_USER_ID
     ):
         if message.from_user:
-            await message.answer("Доступ запрещён.")
+            await message.answer(
+                "Доступ запрещён."
+            )
 
         return False
 
@@ -2428,14 +2650,22 @@ async def status_command(message: Message):
         - started_at
     )
 
+    providers = configured_ai_providers()
+
+    provider_names = ", ".join(
+        name for name, _ in providers
+    ) or "нет"
+
     await message.answer(
         f"GUBKA GPT\n\n"
         f"Статус: работает\n"
         f"Репозиторий: {GITHUB_REPO}\n"
         f"Ветка: {GITHUB_BRANCH}\n"
-        f"Провайдеры: {', '.join(name for name, _ in configured_ai_providers())}\n"
-        f"Render API: {'подключён' if RENDER_API_KEY else 'не подключён'}\n"
-        f"Работает: {int(uptime.total_seconds() // 60)} мин."
+        f"Провайдеры: {provider_names}\n"
+        f"Render API: "
+        f"{'подключён' if RENDER_API_KEY else 'не подключён'}\n"
+        f"Работает: "
+        f"{int(uptime.total_seconds() // 60)} мин."
     )
 
 
@@ -2654,12 +2884,18 @@ async def main():
     try:
         await start_web_server()
 
+        providers = configured_ai_providers()
+
         print(
             "Gubka GPT started",
             WEB_APP_URL,
             GITHUB_REPO,
             GITHUB_BRANCH,
-            MODEL,
+            "AI providers:",
+            ", ".join(
+                f"{name}/{config['model']}"
+                for name, config in providers
+            ),
             "Render API:",
             bool(RENDER_API_KEY)
         )
