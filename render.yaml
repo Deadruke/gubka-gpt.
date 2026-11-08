@@ -2,33 +2,7 @@ services:
   - type: web
     name: gubka-gpt
     runtime: python
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
-
-    envVars:
-      - key: PYTHON_VERSION
-        value: "3.12.11"
-
-      - key: BOT_TOKEN
-        sync: false
-
-      - key: OPENROUTER_KEY
-        sync: false
-
-      - key: XAI_API_KEY
-        sync: false
-
-      - key: MISTRAL_API_KEY
-        sync: false
-
-      - key: CLOUDFLARE_API_TOKEN
-        sync: false
-
-      - key: CLOUDFLARE_ACCOUNT_ID
-        sync: false
-
-      - key: SAMBANOVA_API_KEY
-        sync: false
-
-      - key: PORT
-        value: "10000"
+    healthCheckPath: /
