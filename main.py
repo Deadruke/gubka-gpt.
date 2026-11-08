@@ -37,6 +37,9 @@ from oauth_auth import (
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
 
@@ -50,6 +53,17 @@ GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip()
 MODEL = os.getenv(
     "OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it:free"
 ).strip()
+GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai").strip().rstrip("/")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip().rstrip("/")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash").strip()
+GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1").strip().rstrip("/")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+AI_PROVIDER_ORDER = [
+    item.strip().lower()
+    for item in os.getenv("AI_PROVIDER_ORDER", "openrouter,gemini,deepseek,groq").split(",")
+    if item.strip()
+]
 
 WEB_APP_URL = os.getenv(
     "WEB_APP_URL", "https://gubka-gpt.onrender.com"
@@ -72,12 +86,17 @@ RENDER_API = "https://api.render.com/v1"
 
 for key, value in {
     "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
-    "OPENROUTER_KEY": OPENROUTER_KEY,
     "GITHUB_TOKEN": GITHUB_TOKEN,
     "ALLOWED_USER_ID": ALLOWED_USER_ID,
 }.items():
     if not value:
         raise RuntimeError(f"Не задана переменная Render: {key}")
+
+if not any([OPENROUTER_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY]):
+    raise RuntimeError(
+        "Не задан ни один AI API key. Добавь хотя бы один из: "
+        "OPENROUTER_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY."
+    )
 
 ALLOWED_USER_ID = int(ALLOWED_USER_ID)
 MAX_OUTPUT_TOKENS = max(256, min(MAX_OUTPUT_TOKENS, 8192))
@@ -106,7 +125,10 @@ repo_context = contextvars.ContextVar("gubka_repo_context", default=None)
 branch_context = contextvars.ContextVar("gubka_branch_context", default=None)
 web_request_context = contextvars.ContextVar("gubka_web_request_context", default=False)
 github_session_context = contextvars.ContextVar("gubka_github_session", default=None)
-last_model_context = contextvars.ContextVar("gubka_last_model_context", default=MODEL)
+last_model_context = contextvars.ContextVar(
+    "gubka_last_model_context",
+    default=f"OpenRouter / {MODEL}" if OPENROUTER_KEY else "AI provider"
+)
 
 # =========================================================
 # AI SYSTEM
@@ -1114,62 +1136,138 @@ async def execute_tool(name, args):
 # OPENROUTER
 # =========================================================
 
-async def openrouter(messages, tools=None, max_tokens=None):
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": WEB_APP_URL,
-        "X-Title": "Gubka GPT"
+class AIProviderError(RuntimeError):
+    def __init__(self, provider, message, status=None, retryable=False):
+        super().__init__(message)
+        self.provider = provider
+        self.status = status
+        self.retryable = retryable
+
+
+def configured_ai_providers():
+    configs = {
+        "openrouter": {"key": OPENROUTER_KEY, "base_url": "https://openrouter.ai/api/v1", "model": MODEL},
+        "gemini": {"key": GEMINI_API_KEY, "base_url": GEMINI_BASE_URL, "model": GEMINI_MODEL},
+        "deepseek": {"key": DEEPSEEK_API_KEY, "base_url": DEEPSEEK_BASE_URL, "model": DEEPSEEK_MODEL},
+        "groq": {"key": GROQ_API_KEY, "base_url": GROQ_BASE_URL, "model": GROQ_MODEL},
     }
+    ordered, seen = [], set()
+    for name in AI_PROVIDER_ORDER:
+        if name in configs and name not in seen:
+            seen.add(name)
+            if configs[name]["key"]:
+                ordered.append((name, configs[name]))
+    for name, config in configs.items():
+        if name not in seen and config["key"]:
+            ordered.append((name, config))
+    return ordered
 
-    models = [MODEL]
 
-    if MODEL != "openrouter/free":
+def classify_provider_error(provider, status, body):
+    lowered = str(body).lower()
+    if provider == "openrouter" and status == 429 and any(
+        marker in lowered for marker in (
+            "free-models-per-day", "free models per day",
+            "daily limit", "daily quota", "requests per day"
+        )
+    ):
+        return AIProviderError(
+            provider,
+            "OpenRouter исчерпал общий дневной лимит API-ключа. "
+            "Смена модели внутри OpenRouter этот лимит не сбрасывает.",
+            status, False
+        )
+    if status in (408, 409, 425, 429) or status >= 500:
+        return AIProviderError(
+            provider, f"Временная ошибка {provider} (HTTP {status}): {str(body)[:700]}",
+            status, True
+        )
+    return AIProviderError(
+        provider, f"Ошибка {provider} (HTTP {status}): {str(body)[:700]}",
+        status, False
+    )
+
+
+async def provider_completion(provider, config, messages, tools=None, max_tokens=None):
+    endpoint = config["base_url"].rstrip("/") + "/chat/completions"
+    headers = {"Authorization": f"Bearer {config['key']}", "Content-Type": "application/json"}
+    if provider == "openrouter":
+        headers["HTTP-Referer"] = WEB_APP_URL
+        headers["X-Title"] = "Gubka GPT"
+
+    payload = {
+        "model": config["model"],
+        "messages": messages,
+        "temperature": 0.3,
+        "max_tokens": max_tokens or MAX_OUTPUT_TOKENS,
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    if provider == "deepseek":
+        payload["thinking"] = {"type": "disabled"}
+
+    models = [config["model"]]
+    if provider == "openrouter" and config["model"] != "openrouter/free":
         models.append("openrouter/free")
 
     last_error = None
-
-    for selected_model in models:
-        payload = {
-            "model": selected_model,
-            "messages": messages,
-            "temperature": 0.3,
-            "max_tokens": max_tokens or MAX_OUTPUT_TOKENS
-        }
-
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
-
+    for model in models:
+        payload["model"] = model
         try:
-            data = await request_json(
-                "POST",
-                OPENROUTER_API,
-                headers=headers,
-                payload=payload
-            )
+            async with get_session().post(endpoint, headers=headers, json=payload) as response:
+                raw = await response.text()
+                if response.status >= 400:
+                    error = classify_provider_error(provider, response.status, raw)
+                    if provider == "openrouter" and error.retryable and model != models[-1]:
+                        last_error = error
+                        continue
+                    raise error
+                try:
+                    data = json.loads(raw) if raw else {}
+                except json.JSONDecodeError:
+                    raise AIProviderError(provider, f"{provider}: сервер вернул некорректный JSON.", retryable=True)
 
             choices = data.get("choices") or []
-
             if not choices:
-                raise RuntimeError(
-                    "OpenRouter не вернул ответ."
-                )
-
-            last_model_context.set(
-                data.get("model") or selected_model
-            )
-
+                raise AIProviderError(provider, f"{provider}: API не вернул choices.", retryable=True)
+            last_model_context.set(f"{provider.capitalize()} / {data.get('model') or model}")
             return choices[0]
-
+        except AIProviderError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            raise AIProviderError(provider, f"Сетевая ошибка {provider}: {str(exc)[:500]}", retryable=True)
         except Exception as exc:
-            last_error = exc
+            raise AIProviderError(provider, f"Неожиданная ошибка {provider}: {str(exc)[:500]}", retryable=True)
 
-    raise RuntimeError(
-        "Не удалось получить ответ от OpenRouter: "
-        + str(last_error)[:700]
-    )
+    if last_error:
+        raise last_error
+    raise AIProviderError(provider, f"{provider}: не удалось получить ответ.", retryable=True)
 
+
+async def openrouter(messages, tools=None, max_tokens=None):
+    """Compatibility wrapper retained for existing internal callers."""
+    if not OPENROUTER_KEY:
+        raise AIProviderError("openrouter", "OpenRouter не настроен: отсутствует OPENROUTER_KEY.", retryable=False)
+    config = {"key": OPENROUTER_KEY, "base_url": "https://openrouter.ai/api/v1", "model": MODEL}
+    return await provider_completion("openrouter", config, messages, tools, max_tokens)
+
+
+async def request_ai_completion(messages, tools=None, max_tokens=None):
+    providers = configured_ai_providers()
+    if not providers:
+        raise RuntimeError("Нет настроенных AI-провайдеров. Добавь хотя бы один API key.")
+    errors = []
+    for index, (provider, config) in enumerate(providers):
+        try:
+            return await provider_completion(provider, config, messages, tools, max_tokens)
+        except AIProviderError as exc:
+            errors.append(str(exc))
+            if not exc.retryable:
+                raise RuntimeError(str(exc))
+            if index == len(providers) - 1:
+                break
+    raise RuntimeError("Все настроенные ИИ-провайдеры временно недоступны.\n" + "\n".join(errors[-4:]))
 
 def message_text(msg):
     content = msg.get("content")
@@ -1192,7 +1290,7 @@ async def ask_ai(messages):
     work = list(messages)
 
     for _ in range(MAX_TOOL_CALLS):
-        choice = await openrouter(
+        choice = await request_ai_completion(
             work,
             tools=AI_TOOLS
         )
@@ -1427,7 +1525,10 @@ async def health(request):
     return web.json_response({
         "status": "ok",
         "service": "Gubka GPT",
-        "model": MODEL,
+        "model": (
+            f"{configured_ai_providers()[0][0]} / {configured_ai_providers()[0][1]['model']}"
+            if configured_ai_providers() else "not configured"
+        ),
         "render_connected": bool(RENDER_API_KEY)
     })
 
@@ -1454,7 +1555,10 @@ async def api_me(request):
             "login": user.get("login"),
             "provider": provider
         },
-        "model": MODEL,
+        "model": (
+            f"{configured_ai_providers()[0][0]} / {configured_ai_providers()[0][1]['model']}"
+            if configured_ai_providers() else "not configured"
+        ),
         "repo": (
             record.get("selected_repo")
             if record else None
@@ -2329,7 +2433,7 @@ async def status_command(message: Message):
         f"Статус: работает\n"
         f"Репозиторий: {GITHUB_REPO}\n"
         f"Ветка: {GITHUB_BRANCH}\n"
-        f"Модель: {MODEL}\n"
+        f"Провайдеры: {', '.join(name for name, _ in configured_ai_providers())}\n"
         f"Render API: {'подключён' if RENDER_API_KEY else 'не подключён'}\n"
         f"Работает: {int(uptime.total_seconds() // 60)} мин."
     )
