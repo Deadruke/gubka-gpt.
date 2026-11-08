@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -91,10 +90,34 @@ button:disabled { opacity:.5; cursor:not-allowed; }
 .account-sub { font-size:10px;color:#888;margin-top:4px; }
 .main { flex:1;min-width:0;display:flex;flex-direction:column;position:relative; }
 .topbar {
-  height:58px;flex-shrink:0;display:flex;align-items:center;
+  min-height:58px;flex-shrink:0;display:flex;align-items:center;
   gap:12px;padding:0 18px;border-bottom:1px solid #252525;
 }
 .top-title { font-size:14px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+
+/* Переключатель моделей */
+.model-picker-wrap {
+  display:flex;align-items:center;gap:7px;flex-shrink:0;
+}
+.model-picker-label {
+  color:#858585;font-size:11px;
+}
+#modelSelect {
+  max-width:230px;min-width:125px;
+  padding:8px 29px 8px 10px;
+  border:1px solid #3b3b3b;border-radius:9px;
+  background:#202020;color:#eee;
+  font-size:12px;outline:none;
+  appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23929292' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 9px center;
+}
+#modelSelect:focus { border-color:#666; }
+#modelSelect:disabled { opacity:.55; }
+.model-status {
+  font-size:10px;color:#777;max-width:100px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
 .top-status { font-size:11px;color:#858585;display:flex;align-items:center;gap:7px; }
 .status-dot { width:7px;height:7px;border-radius:50%;background:#777; }
 .workspace { flex:1;min-height:0;display:none;flex-direction:column;overflow:hidden; }
@@ -262,7 +285,14 @@ textarea.field { resize:vertical;line-height:1.5; }
   }
   .sidebar.open { transform:translateX(0); }
   .overlay.show { display:block; }
-  .topbar { padding:0 11px; }
+  .topbar { padding:0 9px;gap:7px; }
+  .top-title { min-width:35px;font-size:12px; }
+  .model-picker-wrap { gap:4px; }
+  .model-picker-label { display:none; }
+  #modelSelect { min-width:95px;max-width:135px;padding:7px 24px 7px 7px;font-size:10px; }
+  .model-status { display:none; }
+  .top-status { font-size:0;gap:0; }
+  .top-status .status-dot { width:7px;height:7px; }
   .chat-scroll { padding:17px 13px; }
   .composer-area { padding:8px 10px 10px; }
   .message { max-width:95%;font-size:13px; }
@@ -314,6 +344,15 @@ textarea.field { resize:vertical;line-height:1.5; }
     <header class="topbar">
       <button class="icon-btn" id="menuBtn" aria-label="Меню">☰</button>
       <div class="top-title" id="topTitle">Новый чат</div>
+
+      <div class="model-picker-wrap">
+        <span class="model-picker-label">Модель</span>
+        <select id="modelSelect" disabled>
+          <option value="">Загрузка моделей...</option>
+        </select>
+        <span class="model-status" id="modelStatus">Загрузка</span>
+      </div>
+
       <div class="top-status"><span class="status-dot" id="statusDot"></span><span id="connectionStatus">Подключение</span></div>
     </header>
 
@@ -494,6 +533,8 @@ let chatStore = loadStore();
 let currentChatId = "";
 let currentUser = null;
 let currentModel = "";
+let currentModelProvider = "";
+let availableModels = [];
 let currentFileContent = "";
 let requestCount = Number(localStorage.getItem(STATS_KEY+"_requests") || 0);
 let totalTime = Number(localStorage.getItem(STATS_KEY+"_time") || 0);
@@ -536,6 +577,118 @@ async function api(path, options={}) {
   if (!response.ok) throw new Error(data.error || data.detail || data.message || ("HTTP "+response.status));
   return data;
 }
+
+/* Загрузка моделей с сервера */
+function modelLabel(model) {
+  const provider = String(model.provider || "").toUpperCase();
+  return provider + " · " + (model.name || model.id);
+}
+
+async function loadModels(serverModel="") {
+  const select = $("modelSelect");
+  const status = $("modelStatus");
+
+  select.disabled = true;
+  select.innerHTML = '<option value="">Загрузка моделей...</option>';
+  status.textContent = "Загрузка";
+
+  try {
+    const data = await api("/api/models");
+    availableModels = Array.isArray(data.models) ? data.models : [];
+
+    if (!availableModels.length) {
+      select.innerHTML = '<option value="">Нет доступных моделей</option>';
+      status.textContent = "Нет моделей";
+      return;
+    }
+
+    select.innerHTML = "";
+
+    availableModels.forEach((model,index)=>{
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = modelLabel(model);
+      option.dataset.model = model.id;
+      option.dataset.provider = model.provider;
+      select.append(option);
+    });
+
+    let selectedIndex = -1;
+
+    if (serverModel) {
+      selectedIndex = availableModels.findIndex(model=>{
+        const fullName = String(model.provider) + " / " + String(model.id);
+        return serverModel === fullName ||
+          serverModel.endsWith(" / " + String(model.id));
+      });
+    }
+
+    if (selectedIndex < 0) selectedIndex = 0;
+
+    select.value = String(selectedIndex);
+    const selected = availableModels[selectedIndex];
+
+    currentModel = selected.id;
+    currentModelProvider = selected.provider;
+
+    select.disabled = false;
+    status.textContent = "Готово";
+    $("modelInfo").textContent =
+      "Текущая модель: " + selected.provider + " / " + selected.id;
+
+  } catch(e) {
+    select.innerHTML = '<option value="">Не удалось загрузить модели</option>';
+    status.textContent = "Ошибка";
+    console.error("Models:",e.message);
+  }
+}
+
+async function selectModel() {
+  const select = $("modelSelect");
+  const index = Number(select.value);
+  const model = availableModels[index];
+
+  if (!model) return;
+
+  const previousModel = currentModel;
+  const previousProvider = currentModelProvider;
+
+  select.disabled = true;
+  $("modelStatus").textContent = "Сохранение";
+
+  try {
+    await api("/api/select-model",{
+      method:"POST",
+      body:JSON.stringify({
+        model:model.id,
+        provider:model.provider
+      })
+    });
+
+    currentModel = model.id;
+    currentModelProvider = model.provider;
+
+    $("modelStatus").textContent = "Выбрана";
+    $("modelInfo").textContent =
+      "Текущая модель: " + model.provider + " / " + model.id;
+
+  } catch(e) {
+    currentModel = previousModel;
+    currentModelProvider = previousProvider;
+
+    $("modelStatus").textContent = "Ошибка";
+    alert("Не удалось переключить модель: " + e.message);
+
+    const oldIndex = availableModels.findIndex(item=>
+      item.id === previousModel && item.provider === previousProvider
+    );
+    if (oldIndex >= 0) select.value = String(oldIndex);
+  } finally {
+    select.disabled = false;
+  }
+}
+
+$("modelSelect").addEventListener("change",selectModel);
 
 function setStatus(text,good=true) {
   $("connectionStatus").textContent = text;
@@ -792,6 +945,8 @@ async function loadMe() {
     $("logoutBtn").style.display = "inline-block";
     $("sideGithubLogin").style.display = provider==="github" ? "none" : "flex";
     $("githubLoginMain").style.display = provider==="github" ? "none" : "inline-block";
+
+    await loadModels(data.model || "");
     return data;
   } catch(e) {
     setStatus("Нужен вход",false);
@@ -805,6 +960,9 @@ async function loadMe() {
     $("logoutBtn").style.display = "none";
     $("sideGithubLogin").style.display = "flex";
     $("githubLoginMain").style.display = "inline-block";
+    $("modelSelect").innerHTML = '<option value="">Сначала войди</option>';
+    $("modelSelect").disabled = true;
+    $("modelStatus").textContent = "Нет входа";
     return null;
   }
 }
@@ -1058,8 +1216,9 @@ async function runTerminal(raw) {
       const u = d.user || {};
       termWrite((u.first_name||u.login||"Пользователь")+" · "+(u.provider||"unknown")+" · ID "+(u.id||"?"));
     } else if (cmd==="model") {
-      const d = await api("/api/me");
-      termWrite("Модель: "+(d.model||"не указана"));
+      termWrite("Модель: "+(currentModelProvider && currentModel
+        ? currentModelProvider+" / "+currentModel
+        : "не указана"));
     } else if (cmd==="repo" || cmd==="pwd") {
       const d = await api("/api/me");
       termWrite("Репозиторий: "+(d.repo||"не выбран"));
