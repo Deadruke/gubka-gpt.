@@ -1,14 +1,30 @@
-# Exported from Render on 2024-03-15T12:00:00Z
 services:
-- type: web
-  name: gubka-bot-gei
-  runtime: python
-  repo: https://github.com/Deadruke/gubka-bot-gei
-  region: frankfurt
-  plan: free
-  branch: main
-  buildCommand: pip install -r requirements.txt
-  startCommand: python main.py
-  envVars:
-  - key: BOT_TOKEN
-    sync: false
+  - type: web
+    name: gubka-gpt
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+
+      - key: OPENROUTER_KEY
+        sync: false
+
+      - key: XAI_API_KEY
+        sync: false
+
+      - key: MISTRAL_API_KEY
+        sync: false
+
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+
+      - key: SAMBANOVA_API_KEY
+        sync: false
+
+      - key: PORT
+        value: "10000"
