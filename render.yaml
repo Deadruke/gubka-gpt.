@@ -4,7 +4,11 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
+
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.11
+
       - key: BOT_TOKEN
         sync: false
 
