@@ -7,6 +7,7 @@ import base64
 import hashlib
 import asyncio
 import contextvars
+import time
 
 from datetime import datetime, timezone, timedelta
 from pathlib import PurePosixPath
@@ -36,14 +37,7 @@ from oauth_auth import (
 # =========================================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "").strip()
-EXPLABS_API_KEY = (os.getenv("EXPLABS_API_KEY", "") or os.getenv("EXPERIENTIAL_LABS_API_KEY", "")).strip()
-EXPLABS_BASE_URL = os.getenv("EXPLABS_BASE_URL", "https://api.experientiallabs.ai/v1").strip().rstrip("/")
-
+OPENROUTER_KEY = os.getenv("OPENROUTER_KEY", "").strip()
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
 
@@ -54,49 +48,9 @@ GITHUB_REPO = os.getenv(
 ).strip().strip("/")
 
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip()
-
-GEMINI_BASE_URL = os.getenv(
-    "GEMINI_BASE_URL",
-    "https://generativelanguage.googleapis.com/v1beta/openai"
-).strip().rstrip("/")
-
-GEMINI_MODEL = os.getenv(
-    "GEMINI_MODEL", "gemini-2.5-flash"
+MODEL = os.getenv(
+    "OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it:free"
 ).strip()
-
-DEEPSEEK_BASE_URL = os.getenv(
-    "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
-).strip().rstrip("/")
-
-DEEPSEEK_MODEL = os.getenv(
-    "DEEPSEEK_MODEL", "deepseek-chat"
-).strip()
-
-GROQ_BASE_URL = os.getenv(
-    "GROQ_BASE_URL", "https://api.groq.com/openai/v1"
-).strip().rstrip("/")
-
-GROQ_MODEL = os.getenv(
-    "GROQ_MODEL", "llama-3.3-70b-versatile"
-).strip()
-
-SILICONFLOW_BASE_URL = os.getenv(
-    "SILICONFLOW_BASE_URL",
-    "https://api.siliconflow.com/v1"
-).strip().rstrip("/")
-
-SILICONFLOW_MODEL = os.getenv(
-    "SILICONFLOW_MODEL",
-    "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-).strip()
-
-# Порядок переключения провайдеров.
-AI_PROVIDER_ORDER = [
-    "gemini",
-    "deepseek",
-    "groq",
-    "siliconflow"
-]
 
 WEB_APP_URL = os.getenv(
     "WEB_APP_URL", "https://gubka-gpt.onrender.com"
@@ -110,46 +64,41 @@ MAX_HISTORY_MESSAGES = 40
 MAX_TOOL_CALLS = 20
 MAX_PENDING_AGE = 3600
 MAX_MESSAGE_LENGTH = 12000
+MODEL_CATALOG_TTL = 900
+MODELS_PER_PROVIDER = 15
+MODEL_PROVIDERS = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "google": "Google Gemini",
+    "deepseek": "DeepSeek",
+    "x-ai": "xAI Grok",
+    "meta-llama": "Meta Llama",
+    "mistralai": "Mistral",
+    "qwen": "Qwen",
+    "cohere": "Cohere",
+    "perplexity": "Perplexity",
+}
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=120)
 
 GITHUB_API = "https://api.github.com"
+OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
 RENDER_API = "https://api.render.com/v1"
 
 for key, value in {
     "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
+    "OPENROUTER_KEY": OPENROUTER_KEY,
     "GITHUB_TOKEN": GITHUB_TOKEN,
     "ALLOWED_USER_ID": ALLOWED_USER_ID,
 }.items():
     if not value:
-        raise RuntimeError(
-            f"Не задана переменная Render: {key}"
-        )
-
-if not any([
-    GEMINI_API_KEY,
-    DEEPSEEK_API_KEY,
-    GROQ_API_KEY,
-    SILICONFLOW_API_KEY,
-    EXPLABS_API_KEY
-]):
-    raise RuntimeError(
-        "Не задан ни один AI API key. Добавь хотя бы один ключ провайдера."
-    )
+        raise RuntimeError(f"Не задана переменная Render: {key}")
 
 ALLOWED_USER_ID = int(ALLOWED_USER_ID)
-MAX_OUTPUT_TOKENS = max(
-    256,
-    min(MAX_OUTPUT_TOKENS, 8192)
-)
+MAX_OUTPUT_TOKENS = max(256, min(MAX_OUTPUT_TOKENS, 8192))
 
-if not re.fullmatch(
-    r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
-    GITHUB_REPO
-):
-    raise RuntimeError(
-        "GITHUB_REPO должен иметь формат owner/repository"
-    )
+if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", GITHUB_REPO):
+    raise RuntimeError("GITHUB_REPO должен иметь формат owner/repository")
 
 # =========================================================
 # APP
@@ -168,36 +117,14 @@ pending = {}
 
 started_at = datetime.now(timezone.utc)
 
-repo_context = contextvars.ContextVar(
-    "gubka_repo_context",
-    default=None
-)
-
-branch_context = contextvars.ContextVar(
-    "gubka_branch_context",
-    default=None
-)
-
-web_request_context = contextvars.ContextVar(
-    "gubka_web_request_context",
-    default=False
-)
-
-github_session_context = contextvars.ContextVar(
-    "gubka_github_session",
-    default=None
-)
-
-last_model_context = contextvars.ContextVar(
-    "gubka_last_model_context",
-    default="AI provider"
-)
-
-selected_ai_context = contextvars.ContextVar(
-    "gubka_selected_ai_context",
-    default=None
-)
-selected_web_models = {}
+repo_context = contextvars.ContextVar("gubka_repo_context", default=None)
+branch_context = contextvars.ContextVar("gubka_branch_context", default=None)
+web_request_context = contextvars.ContextVar("gubka_web_request_context", default=False)
+github_session_context = contextvars.ContextVar("gubka_github_session", default=None)
+last_model_context = contextvars.ContextVar("gubka_last_model_context", default=MODEL)
+current_model_context = contextvars.ContextVar("gubka_current_model_context", default=MODEL)
+selected_models = {}
+model_catalog_cache = {"updated": 0.0, "models": []}
 
 # =========================================================
 # AI SYSTEM
@@ -269,6 +196,8 @@ def tool(name, description, properties=None, required=None):
 
 
 AI_TOOLS = [
+    # ---------------- GITHUB ----------------
+
     tool(
         "github_repo_info",
         "Получить информацию о текущем репозитории."
@@ -322,6 +251,8 @@ AI_TOOLS = [
         },
         ["path", "content"]
     ),
+
+    # ---------------- RENDER ----------------
 
     tool(
         "render_list_services",
@@ -385,20 +316,14 @@ AI_TOOLS = [
 def lock_for(key):
     if key not in locks:
         locks[key] = asyncio.Lock()
-
     return locks[key]
 
 
 def safe_chat_id(value):
     value = str(value or "").strip()
 
-    if not re.fullmatch(
-        r"[A-Za-z0-9_-]{1,80}",
-        value
-    ):
-        raise web.HTTPBadRequest(
-            text="Некорректный ID чата."
-        )
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", value):
+        raise web.HTTPBadRequest(text="Некорректный ID чата.")
 
     return value
 
@@ -418,11 +343,8 @@ def safe_path(path):
         raise ValueError("Некорректный путь.")
 
     forbidden = {
-        ".git",
-        "__pycache__",
-        ".venv",
-        "venv",
-        "node_modules"
+        ".git", "__pycache__", ".venv",
+        "venv", "node_modules"
     }
 
     for part in parts:
@@ -434,14 +356,9 @@ def safe_path(path):
             or low.startswith(".env.")
             or low.endswith(".pem")
             or low.endswith(".key")
-            or low in {
-                "secrets.json",
-                "credentials.json"
-            }
+            or low in {"secrets.json", "credentials.json"}
         ):
-            raise ValueError(
-                "Доступ к этому файлу запрещён."
-            )
+            raise ValueError("Доступ к этому файлу запрещён.")
 
     if len(path) > 240:
         raise ValueError("Слишком длинный путь.")
@@ -451,32 +368,20 @@ def safe_path(path):
 
 def remember(uid, role, content):
     items = histories.setdefault(uid, [])
-
-    items.append({
-        "role": role,
-        "content": content
-    })
-
+    items.append({"role": role, "content": content})
     histories[uid] = items[-MAX_HISTORY_MESSAGES:]
 
 
 def remember_web(uid, chat_id, role, content):
     key = (uid, chat_id)
     items = web_histories.setdefault(key, [])
-
-    items.append({
-        "role": role,
-        "content": content
-    })
-
+    items.append({"role": role, "content": content})
     web_histories[key] = items[-MAX_HISTORY_MESSAGES:]
 
 
 def get_session():
     if session is None or session.closed:
-        raise RuntimeError(
-            "HTTP-сессия ещё не запущена."
-        )
+        raise RuntimeError("HTTP-сессия ещё не запущена.")
 
     return session
 
@@ -500,14 +405,10 @@ def current_user_id(user):
 def ensure_github_authorized():
     if web_request_context.get():
         if not github_token_for_request():
-            raise RuntimeError(
-                "Сначала войди через GitHub."
-            )
+            raise RuntimeError("Сначала войди через GitHub.")
 
     elif not GITHUB_TOKEN:
-        raise RuntimeError(
-            "Не настроен GitHub Token."
-        )
+        raise RuntimeError("Не настроен GitHub Token.")
 
 
 def ensure_render_authorized():
@@ -585,17 +486,11 @@ async def github_request(
 
 
 async def github_info():
-    data = await github_request(
-        "GET",
-        repo_path()
-    )
+    data = await github_request("GET", repo_path())
 
     branch = await github_request(
         "GET",
-        repo_path(
-            "/branches/"
-            + quote(current_branch(), safe="")
-        )
+        repo_path("/branches/" + quote(current_branch(), safe=""))
     )
 
     commit = branch.get("commit", {})
@@ -616,8 +511,7 @@ async def github_tree():
     ref = await github_request(
         "GET",
         repo_path(
-            "/git/ref/heads/"
-            + quote(current_branch(), safe="/")
+            "/git/ref/heads/" + quote(current_branch(), safe="/")
         )
     )
 
@@ -630,9 +524,7 @@ async def github_tree():
 
     tree = await github_request(
         "GET",
-        repo_path(
-            f"/git/trees/{commit['tree']['sha']}"
-        ),
+        repo_path(f"/git/trees/{commit['tree']['sha']}"),
         params={"recursive": "1"}
     )
 
@@ -642,11 +534,7 @@ async def github_tree():
         if item.get("type") == "blob"
     ]
 
-    return (
-        files,
-        tree.get("truncated", False),
-        sha
-    )
+    return files, tree.get("truncated", False), sha
 
 
 async def github_read(path):
@@ -654,34 +542,25 @@ async def github_read(path):
 
     data = await github_request(
         "GET",
-        repo_path(
-            "/contents/"
-            + quote(path, safe="/")
-        ),
+        repo_path("/contents/" + quote(path, safe="/")),
         params={"ref": current_branch()}
     )
 
     if data.get("type") != "file":
-        raise RuntimeError(
-            "Это не обычный файл."
-        )
+        raise RuntimeError("Это не обычный файл.")
 
     raw = base64.b64decode(
         data.get("content", "").replace("\n", "")
     )
 
     if len(raw) > MAX_FILE_BYTES:
-        raise RuntimeError(
-            "Файл превышает лимит 100 КБ."
-        )
+        raise RuntimeError("Файл превышает лимит 100 КБ.")
 
     try:
         content = raw.decode("utf-8")
 
     except UnicodeDecodeError:
-        raise RuntimeError(
-            "Файл не является UTF-8 текстом."
-        )
+        raise RuntimeError("Файл не является UTF-8 текстом.")
 
     return content, data.get("sha")
 
@@ -698,9 +577,7 @@ async def github_list_user_repos():
     )
 
     if not isinstance(data, list):
-        raise RuntimeError(
-            "GitHub вернул некорректный список."
-        )
+        raise RuntimeError("GitHub вернул некорректный список.")
 
     return [
         {
@@ -720,13 +597,8 @@ async def github_create_repository(
     description="",
     private=True
 ):
-    if not re.fullmatch(
-        r"[A-Za-z0-9_.-]{1,100}",
-        name
-    ):
-        raise ValueError(
-            "Некорректное название репозитория."
-        )
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", name):
+        raise ValueError("Некорректное название репозитория.")
 
     data = await github_request(
         "POST",
@@ -755,9 +627,7 @@ async def github_write_file(
     path = safe_path(path)
 
     if not isinstance(content, str):
-        raise ValueError(
-            "Содержимое файла должно быть текстом."
-        )
+        raise ValueError("Содержимое файла должно быть текстом.")
 
     if "\x00" in content:
         raise ValueError(
@@ -767,9 +637,7 @@ async def github_write_file(
     raw = content.encode("utf-8")
 
     if len(raw) > MAX_FILE_BYTES:
-        raise ValueError(
-            "Файл превышает лимит 100 КБ."
-        )
+        raise ValueError("Файл превышает лимит 100 КБ.")
 
     old_sha = None
 
@@ -781,10 +649,7 @@ async def github_write_file(
             raise
 
     payload = {
-        "message": (
-            str(message)[:180]
-            or "Gubka GPT: обновление файла"
-        ),
+        "message": str(message)[:180] or "Gubka GPT: обновление файла",
         "content": base64.b64encode(raw).decode("ascii"),
         "branch": current_branch()
     }
@@ -794,10 +659,7 @@ async def github_write_file(
 
     result = await github_request(
         "PUT",
-        repo_path(
-            "/contents/"
-            + quote(path, safe="/")
-        ),
+        repo_path("/contents/" + quote(path, safe="/")),
         payload=payload
     )
 
@@ -822,18 +684,13 @@ async def github_write_file(
     }
 
 
-async def github_select_repository(
-    repository,
-    branch=""
-):
+async def github_select_repository(repository, branch=""):
     repos = await github_list_user_repos()
 
     selected = next(
         (
             item for item in repos
-            if (
-                item.get("full_name") or ""
-            ).lower() == repository.lower()
+            if (item.get("full_name") or "").lower() == repository.lower()
         ),
         None
     )
@@ -843,19 +700,10 @@ async def github_select_repository(
             "Репозиторий не найден среди доступных."
         )
 
-    branch = (
-        branch
-        or selected.get("default_branch")
-        or "main"
-    )
+    branch = branch or selected.get("default_branch") or "main"
 
-    if not re.fullmatch(
-        r"[A-Za-z0-9_./-]{1,150}",
-        branch
-    ):
-        raise ValueError(
-            "Некорректное название ветки."
-        )
+    if not re.fullmatch(r"[A-Za-z0-9_./-]{1,150}", branch):
+        raise ValueError("Некорректное название ветки.")
 
     await github_request(
         "GET",
@@ -951,13 +799,8 @@ async def render_list_services():
 async def render_get_service(service_id):
     service_id = str(service_id or "").strip()
 
-    if not re.fullmatch(
-        r"[A-Za-z0-9_-]{5,100}",
-        service_id
-    ):
-        raise ValueError(
-            "Некорректный ID сервиса Render."
-        )
+    if not re.fullmatch(r"[A-Za-z0-9_-]{5,100}", service_id):
+        raise ValueError("Некорректный ID сервиса Render.")
 
     services = await render_list_services()
 
@@ -977,16 +820,10 @@ async def render_get_service(service_id):
     return service
 
 
-async def render_list_deploys(
-    service_id,
-    limit=10
-):
+async def render_list_deploys(service_id, limit=10):
     service = await render_get_service(service_id)
 
-    limit = max(
-        1,
-        min(int(limit or 10), 30)
-    )
+    limit = max(1, min(int(limit or 10), 30))
 
     data = await render_request(
         "GET",
@@ -1037,7 +874,6 @@ async def render_service_status(service_id):
     )
 
     service = result["service"]
-
     latest = (
         result["deploys"][0]
         if result["deploys"]
@@ -1064,15 +900,8 @@ async def render_get_logs(
             "Render не вернул ID рабочего пространства."
         )
 
-    minutes = max(
-        1,
-        min(int(minutes or 60), 1440)
-    )
-
-    limit = max(
-        1,
-        min(int(limit or 50), 100)
-    )
+    minutes = max(1, min(int(minutes or 60), 1440))
+    limit = max(1, min(int(limit or 50), 100))
 
     end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(minutes=minutes)
@@ -1127,9 +956,7 @@ async def render_deploy_service(
 
     payload = {
         "clearCache": (
-            "clear"
-            if clear_cache
-            else "do_not_clear"
+            "clear" if clear_cache else "do_not_clear"
         ),
         "deployMode": "build_and_deploy"
     }
@@ -1154,6 +981,8 @@ async def render_deploy_service(
 # =========================================================
 
 async def execute_tool(name, args):
+    # ---------------- RENDER ----------------
+
     if name.startswith("render_"):
         ensure_render_authorized()
 
@@ -1217,9 +1046,9 @@ async def execute_tool(name, args):
                 ensure_ascii=False
             )
 
-        raise ValueError(
-            "Неизвестный инструмент Render."
-        )
+        raise ValueError("Неизвестный инструмент Render.")
+
+    # ---------------- GITHUB ----------------
 
     ensure_github_authorized()
 
@@ -1297,204 +1126,201 @@ async def execute_tool(name, args):
             ensure_ascii=False
         )
 
-    raise ValueError(
-        "Неизвестный инструмент."
-    )
+    raise ValueError("Неизвестный инструмент.")
 
 # =========================================================
-# AI PROVIDERS: GEMINI / DEEPSEEK / GROQ / SILICONFLOW
+# OPENROUTER MODEL CATALOGUE
 # =========================================================
 
-class AIProviderError(RuntimeError):
-    def __init__(
-        self,
-        provider,
-        message,
-        status=None,
-        retryable=True
-    ):
-        super().__init__(message)
-        self.provider = provider
-        self.status = status
-        self.retryable = retryable
-
-
-def configured_ai_providers():
-    configs = {
-        "gemini": {
-            "key": GEMINI_API_KEY,
-            "base_url": GEMINI_BASE_URL,
-            "model": GEMINI_MODEL
-        },
-        "deepseek": {
-            "key": DEEPSEEK_API_KEY,
-            "base_url": DEEPSEEK_BASE_URL,
-            "model": DEEPSEEK_MODEL
-        },
-        "groq": {
-            "key": GROQ_API_KEY,
-            "base_url": GROQ_BASE_URL,
-            "model": GROQ_MODEL
-        },
-        "siliconflow": {
-            "key": SILICONFLOW_API_KEY,
-            "base_url": SILICONFLOW_BASE_URL,
-            "model": SILICONFLOW_MODEL
-        }
-    }
-
-    return [
-        (name, configs[name])
-        for name in AI_PROVIDER_ORDER
-        if name in configs and configs[name]["key"]
-    ]
-
-
-def classify_provider_error(
-    provider,
-    status,
-    body
-):
-    return AIProviderError(
-        provider,
-        (
-            f"Ошибка {provider} "
-            f"(HTTP {status}): {str(body)[:700]}"
-        ),
-        status,
-        True
-    )
-
-
-async def provider_completion(
-    provider,
-    config,
-    messages,
-    tools=None,
-    max_tokens=None
-):
-    endpoint = (
-        config["base_url"].rstrip("/")
-        + "/chat/completions"
-    )
+async def get_available_models(force_refresh=False):
+    """Fetch currently available OpenRouter models and expose 10 vendors."""
+    now = time.monotonic()
+    cached = model_catalog_cache.get("models") or []
+    if cached and not force_refresh and now - model_catalog_cache.get("updated", 0) < MODEL_CATALOG_TTL:
+        return cached
 
     headers = {
-        "Authorization": f"Bearer {config['key']}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {OPENROUTER_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": WEB_APP_URL,
+        "X-Title": "Gubka GPT",
     }
 
-    payload = {
-        "model": config["model"],
-        "messages": messages
-    }
-
-    if provider != "experlabs":
-        payload["temperature"] = 0.3
-        payload["max_tokens"] = max_tokens or MAX_OUTPUT_TOKENS
-
-    if tools:
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
-
-    try:
-        async with get_session().post(
-            endpoint,
-            headers=headers,
-            json=payload
-        ) as response:
-
-            raw = await response.text()
-
-            if response.status >= 400:
-                raise classify_provider_error(
-                    provider,
-                    response.status,
-                    raw
-                )
-
-            try:
-                data = json.loads(raw) if raw else {}
-
-            except json.JSONDecodeError:
-                raise AIProviderError(
-                    provider,
-                    f"{provider}: сервер вернул некорректный JSON."
-                )
-
-        choices = data.get("choices") or []
-
-        if not choices:
-            raise AIProviderError(
-                provider,
-                f"{provider}: API не вернул choices."
-            )
-
-        last_model_context.set(
-            f"{provider.capitalize()} / "
-            f"{data.get('model') or config['model']}"
-        )
-
-        return choices[0]
-
-    except AIProviderError:
-        raise
-
-    except (
-        aiohttp.ClientError,
-        asyncio.TimeoutError
-    ) as exc:
-        raise AIProviderError(
-            provider,
-            f"Сетевая ошибка {provider}: {str(exc)[:500]}"
-        )
-
-    except Exception as exc:
-        raise AIProviderError(
-            provider,
-            f"Неожиданная ошибка {provider}: {str(exc)[:500]}"
-        )
-
-
-async def request_ai_completion(
-    messages,
-    tools=None,
-    max_tokens=None
-):
-    selected = selected_ai_context.get()
-    providers = (
-        [(selected["provider"], selected["config"])]
-        if selected else configured_ai_providers()
+    data = await request_json(
+        "GET",
+        "https://openrouter.ai/api/v1/models",
+        headers=headers,
     )
+    raw_models = data.get("data") or []
+    grouped = {key: [] for key in MODEL_PROVIDERS}
 
-    if not providers:
-        raise RuntimeError(
-            "Нет настроенных AI-провайдеров. "
-            "Добавь хотя бы один API key."
-        )
-
-    errors = []
-
-    for provider, config in providers:
-        try:
-            return await provider_completion(
-                provider,
-                config,
-                messages,
-                tools,
-                max_tokens
-            )
-
-        except AIProviderError as exc:
-            errors.append(
-                f"{provider}: {str(exc)}"
-            )
-
-            # При любой ошибке пробуем следующего провайдера.
+    for item in raw_models:
+        if not isinstance(item, dict):
+            continue
+        model_id = str(item.get("id") or "")
+        if "/" not in model_id:
+            continue
+        prefix = model_id.split("/", 1)[0]
+        if prefix not in grouped:
             continue
 
+        architecture = item.get("architecture") or {}
+        modality = str(architecture.get("modality") or "")
+        if modality and "text" not in modality:
+            continue
+
+        supported = item.get("supported_parameters") or []
+        # The app relies on function calling for GitHub and Render tools.
+        # Exclude models that explicitly do not advertise tool support.
+        if supported and "tools" not in supported:
+            continue
+        pricing = item.get("pricing") or {}
+        prompt_price = str(pricing.get("prompt", ""))
+        completion_price = str(pricing.get("completion", ""))
+        is_free = prompt_price in ("0", "0.0", "0.000000") and completion_price in ("0", "0.0", "0.000000")
+
+        grouped[prefix].append({
+            "id": model_id,
+            "name": str(item.get("name") or model_id),
+            "provider": prefix,
+            "provider_name": MODEL_PROVIDERS[prefix],
+            "context_length": int(item.get("context_length") or 0),
+            "free": is_free,
+            "tools": "tools" in supported if supported else None,
+            "created": int(item.get("created") or 0),
+            "pricing": {
+                "prompt": prompt_price,
+                "completion": completion_price,
+            },
+        })
+
+    result = []
+    for provider in MODEL_PROVIDERS:
+        items = grouped[provider]
+        items.sort(key=lambda m: (not m["free"], -m["created"], -m["context_length"]))
+        result.extend(items[:MODELS_PER_PROVIDER])
+
+    if not result:
+        raise RuntimeError("OpenRouter не вернул модели для выбранных провайдеров.")
+
+    model_catalog_cache["models"] = result
+    model_catalog_cache["updated"] = now
+    return result
+
+
+async def api_models(request):
+    user = web_user(request)
+    try:
+        models = await get_available_models()
+    except Exception as exc:
+        raise web.HTTPBadGateway(text="Не удалось загрузить каталог моделей: " + str(exc)[:500])
+
+    uid = current_user_id(user)
+    current = selected_model_for_user(uid)
+    if not any(item["id"] == current for item in models):
+        current = models[0]["id"]
+        selected_models[uid] = current
+        record = sessions.get(request.cookies.get("gubka_session", ""))
+        if record is not None:
+            record["selected_model"] = current
+            record["selected_model_provider"] = models[0]["provider"]
+
+    return web.json_response({"ok": True, "providers": MODEL_PROVIDERS, "models": models, "selected_model": current})
+
+
+async def api_select_model(request):
+    user = web_user(request)
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="Некорректный JSON.")
+
+    model_id = str(body.get("model") or "").strip()
+    provider = str(body.get("provider") or "").strip()
+    if not model_id or provider not in MODEL_PROVIDERS:
+        raise web.HTTPBadRequest(text="Некорректная модель или провайдер.")
+
+    available = await get_available_models()
+    selected = next((m for m in available if m["id"] == model_id and m["provider"] == provider), None)
+    if not selected:
+        raise web.HTTPBadRequest(text="Эта модель отсутствует в актуальном каталоге OpenRouter.")
+
+    uid = current_user_id(user)
+    selected_models[uid] = model_id
+    record = sessions.get(request.cookies.get("gubka_session", ""))
+    if record is not None:
+        record["selected_model"] = model_id
+        record["selected_model_provider"] = provider
+
+    return web.json_response({"ok": True, "model": model_id, "provider": provider, "name": selected["name"]})
+
+
+def selected_model_for_user(uid):
+    record = github_session_context.get()
+    if record and record.get("selected_model"):
+        return record["selected_model"]
+    return selected_models.get(str(uid), MODEL)
+
+
+# =========================================================
+# OPENROUTER
+# =========================================================
+
+async def openrouter(messages, tools=None, max_tokens=None):
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": WEB_APP_URL,
+        "X-Title": "Gubka GPT"
+    }
+
+    preferred_model = current_model_context.get() or MODEL
+    models = [preferred_model]
+
+    if preferred_model != "openrouter/free":
+        models.append("openrouter/free")
+
+    last_error = None
+
+    for selected_model in models:
+        payload = {
+            "model": selected_model,
+            "messages": messages,
+            "temperature": 0.3,
+            "max_tokens": max_tokens or MAX_OUTPUT_TOKENS
+        }
+
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        try:
+            data = await request_json(
+                "POST",
+                OPENROUTER_API,
+                headers=headers,
+                payload=payload
+            )
+
+            choices = data.get("choices") or []
+
+            if not choices:
+                raise RuntimeError(
+                    "OpenRouter не вернул ответ."
+                )
+
+            last_model_context.set(
+                data.get("model") or selected_model
+            )
+
+            return choices[0]
+
+        except Exception as exc:
+            last_error = exc
+
     raise RuntimeError(
-        "Все настроенные ИИ-провайдеры недоступны.\n"
-        + "\n".join(errors[-4:])
+        "Не удалось получить ответ от OpenRouter: "
+        + str(last_error)[:700]
     )
 
 
@@ -1519,7 +1345,7 @@ async def ask_ai(messages):
     work = list(messages)
 
     for _ in range(MAX_TOOL_CALLS):
-        choice = await request_ai_completion(
+        choice = await openrouter(
             work,
             tools=AI_TOOLS
         )
@@ -1685,14 +1511,10 @@ def web_user(request):
 # =========================================================
 
 @web.middleware
-async def request_context_middleware(
-    request,
-    handler
-):
+async def request_context_middleware(request, handler):
     tokens = []
 
     web_token = web_request_context.set(True)
-
     tokens.append((
         web_request_context,
         web_token
@@ -1706,9 +1528,7 @@ async def request_context_middleware(
     record = sessions.get(session_id)
 
     if record:
-        session_token = github_session_context.set(
-            record
-        )
+        session_token = github_session_context.set(record)
 
         tokens.append((
             github_session_context,
@@ -1757,106 +1577,12 @@ async def index(request):
 
 
 async def health(request):
-    providers = configured_ai_providers()
-
     return web.json_response({
         "status": "ok",
         "service": "Gubka GPT",
-        "model": (
-            f"{providers[0][0]} / {providers[0][1]['model']}"
-            if providers else "not configured"
-        ),
-        "providers": [
-            {"name": name, "model": config["model"]}
-            for name, config in providers
-        ],
+        "model": MODEL,
         "render_connected": bool(RENDER_API_KEY)
     })
-
-# =========================================================
-# MODEL SELECTION
-# =========================================================
-
-async def available_web_models():
-    models = []
-
-    for name, config in configured_ai_providers():
-        models.append({
-            "id": config["model"],
-            "name": config["model"],
-            "provider": name,
-            "base_url": config["base_url"],
-            "key": config["key"]
-        })
-
-    if EXPLABS_API_KEY:
-        try:
-            async with get_session().get(
-                EXPLABS_BASE_URL + "/models",
-                headers={"Authorization": f"Bearer {EXPLABS_API_KEY}"}
-            ) as response:
-                raw = await response.text()
-                if response.status < 400:
-                    data = json.loads(raw) if raw else {}
-                    for item in data.get("data", []):
-                        model_id = item.get("id") if isinstance(item, dict) else None
-                        if model_id:
-                            models.append({
-                                "id": model_id,
-                                "name": model_id,
-                                "provider": "experlabs",
-                                "base_url": EXPLABS_BASE_URL,
-                                "key": EXPLABS_API_KEY
-                            })
-                else:
-                    print("Experiential Labs models API:", response.status, raw[:300])
-        except Exception as exc:
-            print("Experiential Labs models list unavailable:", str(exc)[:300])
-
-    unique = {}
-    for item in models:
-        unique[(item["provider"], item["id"])] = item
-    return list(unique.values())
-
-
-async def api_models(request):
-    web_user(request)
-    models = await available_web_models()
-    return web.json_response({
-        "ok": True,
-        "models": [
-            {"id": item["id"], "name": item["name"], "provider": item["provider"]}
-            for item in models
-        ]
-    })
-
-
-async def api_select_model(request):
-    user = web_user(request)
-    try:
-        body = await request.json()
-    except Exception:
-        raise web.HTTPBadRequest(text="Некорректный JSON.")
-
-    model_id = str(body.get("model", "")).strip()
-    provider = str(body.get("provider", "")).strip()
-    if not model_id or not provider:
-        raise web.HTTPBadRequest(text="Не выбрана модель.")
-
-    models = await available_web_models()
-    selected = next((item for item in models if item["id"] == model_id and item["provider"] == provider), None)
-    if not selected:
-        raise web.HTTPBadRequest(text="Эта модель недоступна или не настроена.")
-
-    selected_web_models[current_user_id(user)] = {
-        "provider": selected["provider"],
-        "config": {
-            "key": selected["key"],
-            "base_url": selected["base_url"],
-            "model": selected["id"]
-        }
-    }
-    return web.json_response({"ok": True, "model": model_id, "provider": provider})
 
 # =========================================================
 # WEB API
@@ -1870,13 +1596,6 @@ async def api_me(request):
         request.cookies.get("gubka_session", "")
     )
 
-    providers = configured_ai_providers()
-    selected = selected_web_models.get(current_user_id(user))
-    selected_label = (
-        f"{selected['provider']} / {selected['config']['model']}"
-        if selected else None
-    )
-
     return web.json_response({
         "ok": True,
         "user": {
@@ -1888,23 +1607,10 @@ async def api_me(request):
             "login": user.get("login"),
             "provider": provider
         },
-        "model": selected_label or (
-            f"{providers[0][0]} / {providers[0][1]['model']}"
-            if providers else "not configured"
-        ),
-        "selected_model": selected["config"]["model"] if selected else None,
-        "selected_provider": selected["provider"] if selected else None,
-        "providers": [
-            {
-                "name": name,
-                "model": config["model"]
-            }
-            for name, config in providers
-        ],
+        "model": selected_model_for_user(current_user_id(user)),
         "repo": (
             record.get("selected_repo")
-            if record
-            else None
+            if record else None
         ),
         "github_connected": provider == "github",
         "render_connected": bool(RENDER_API_KEY)
@@ -2067,12 +1773,11 @@ async def api_chat(request):
     uid = current_user_id(user)
     key = (uid, chat_id)
 
-    async with lock_for(key):
-        history = web_histories.get(key, [])
+    model_token = current_model_context.set(selected_model_for_user(uid))
+    try:
+        async with lock_for(key):
+            history = web_histories.get(key, [])
 
-        selected = selected_web_models.get(uid)
-        selection_token = selected_ai_context.set(selected)
-        try:
             answer = await ask_ai([
                 {
                     "role": "system",
@@ -2084,24 +1789,24 @@ async def api_chat(request):
                     "content": text
                 }
             ])
-        finally:
-            selected_ai_context.reset(selection_token)
 
-        used_model = last_model_context.get()
+            used_model = last_model_context.get()
 
-        remember_web(
-            uid,
-            chat_id,
-            "user",
-            text
-        )
+            remember_web(
+                uid,
+                chat_id,
+                "user",
+                text
+            )
 
-        remember_web(
-            uid,
-            chat_id,
-            "assistant",
-            answer
-        )
+            remember_web(
+                uid,
+                chat_id,
+                "assistant",
+                answer
+            )
+    finally:
+        current_model_context.reset(model_token)
 
     return web.json_response({
         "answer": answer,
@@ -2297,17 +2002,20 @@ async def api_prepare(request):
 Не более 5 файлов.
 """
 
-    # Используем общую систему Gemini -> DeepSeek -> Groq.
-    choice = await request_ai_completion([
-        {
-            "role": "system",
-            "content": "Ты опытный разработчик. Выдавай полные файлы."
-        },
-        {
-            "role": "user",
-            "content": prompt
-        }
-    ])
+    model_token = current_model_context.set(selected_model_for_user(uid))
+    try:
+        choice = await openrouter([
+            {
+                "role": "system",
+                "content": "Ты опытный разработчик. Выдавай полные файлы."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ])
+    finally:
+        current_model_context.reset(model_token)
 
     output = message_text(
         choice.get("message", {})
@@ -2655,6 +2363,7 @@ async def start_web_server():
         client_max_size=2 * 1024 * 1024
     )
 
+    # Сначала регистрируем middleware.
     app.middlewares.append(
         request_context_middleware
     )
@@ -2720,9 +2429,7 @@ async def authorized(message):
         or message.from_user.id != ALLOWED_USER_ID
     ):
         if message.from_user:
-            await message.answer(
-                "Доступ запрещён."
-            )
+            await message.answer("Доступ запрещён.")
 
         return False
 
@@ -2780,22 +2487,14 @@ async def status_command(message: Message):
         - started_at
     )
 
-    providers = configured_ai_providers()
-
-    provider_names = ", ".join(
-        name for name, _ in providers
-    ) or "нет"
-
     await message.answer(
         f"GUBKA GPT\n\n"
         f"Статус: работает\n"
         f"Репозиторий: {GITHUB_REPO}\n"
         f"Ветка: {GITHUB_BRANCH}\n"
-        f"Провайдеры: {provider_names}\n"
-        f"Render API: "
-        f"{'подключён' if RENDER_API_KEY else 'не подключён'}\n"
-        f"Работает: "
-        f"{int(uptime.total_seconds() // 60)} мин."
+        f"Модель: {MODEL}\n"
+        f"Render API: {'подключён' if RENDER_API_KEY else 'не подключён'}\n"
+        f"Работает: {int(uptime.total_seconds() // 60)} мин."
     )
 
 
@@ -3014,18 +2713,12 @@ async def main():
     try:
         await start_web_server()
 
-        providers = configured_ai_providers()
-
         print(
             "Gubka GPT started",
             WEB_APP_URL,
             GITHUB_REPO,
             GITHUB_BRANCH,
-            "AI providers:",
-            ", ".join(
-                f"{name}/{config['model']}"
-                for name, config in providers
-            ),
+            MODEL,
             "Render API:",
             bool(RENDER_API_KEY)
         )
