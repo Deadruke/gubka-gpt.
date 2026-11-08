@@ -40,6 +40,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "").strip()
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
@@ -77,8 +78,23 @@ GROQ_MODEL = os.getenv(
     "GROQ_MODEL", "llama-3.3-70b-versatile"
 ).strip()
 
+SILICONFLOW_BASE_URL = os.getenv(
+    "SILICONFLOW_BASE_URL",
+    "https://api.siliconflow.com/v1"
+).strip().rstrip("/")
+
+SILICONFLOW_MODEL = os.getenv(
+    "SILICONFLOW_MODEL",
+    "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+).strip()
+
 # Порядок переключения провайдеров.
-AI_PROVIDER_ORDER = ["gemini", "deepseek", "groq"]
+AI_PROVIDER_ORDER = [
+    "gemini",
+    "deepseek",
+    "groq",
+    "siliconflow"
+]
 
 WEB_APP_URL = os.getenv(
     "WEB_APP_URL", "https://gubka-gpt.onrender.com"
@@ -111,11 +127,13 @@ for key, value in {
 if not any([
     GEMINI_API_KEY,
     DEEPSEEK_API_KEY,
-    GROQ_API_KEY
+    GROQ_API_KEY,
+    SILICONFLOW_API_KEY
 ]):
     raise RuntimeError(
         "Не задан ни один AI API key. Добавь хотя бы один из: "
-        "GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY."
+        "GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY, "
+        "SILICONFLOW_API_KEY."
     )
 
 ALLOWED_USER_ID = int(ALLOWED_USER_ID)
@@ -1277,7 +1295,7 @@ async def execute_tool(name, args):
     )
 
 # =========================================================
-# AI PROVIDERS: GEMINI / DEEPSEEK / GROQ
+# AI PROVIDERS: GEMINI / DEEPSEEK / GROQ / SILICONFLOW
 # =========================================================
 
 class AIProviderError(RuntimeError):
@@ -1310,6 +1328,11 @@ def configured_ai_providers():
             "key": GROQ_API_KEY,
             "base_url": GROQ_BASE_URL,
             "model": GROQ_MODEL
+        },
+        "siliconflow": {
+            "key": SILICONFLOW_API_KEY,
+            "base_url": SILICONFLOW_BASE_URL,
+            "model": SILICONFLOW_MODEL
         }
     }
 
