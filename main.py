@@ -47,9 +47,8 @@ GITHUB_REPO = os.getenv(
 ).strip().strip("/")
 
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip()
-
 MODEL = os.getenv(
-    "OPENROUTER_MODEL", "openrouter/free"
+    "OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it:free"
 ).strip()
 
 WEB_APP_URL = os.getenv(
