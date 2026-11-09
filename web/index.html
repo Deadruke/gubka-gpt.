@@ -303,6 +303,27 @@ textarea.field { resize:vertical;line-height:1.5; }
 @media(min-width:761px) {
   .sidebar.collapsed { width:0;padding:0;overflow:hidden;border:0; }
 }
+
+/* Render Manager — дополнительные стили без изменения существующего интерфейса */
+.render-service-list { display:flex;flex-direction:column;gap:7px;margin-top:12px; }
+.render-service-item {
+  width:100%;text-align:left;padding:12px;border:1px solid #303030;
+  border-radius:9px;background:#202020;color:#ddd;font-size:12px;
+}
+.render-service-item:hover,.render-service-item.active { border-color:#666;background:#282828; }
+.render-service-name { font-weight:650;font-size:13px; }
+.render-service-meta { color:#888;font-size:10px;margin-top:5px;overflow-wrap:anywhere; }
+.render-tabs { display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px; }
+.render-tab { border:1px solid #383838;border-radius:8px;background:#202020;color:#aaa;padding:8px 11px;font-size:11px; }
+.render-tab.active { background:#303030;border-color:#666;color:#fff; }
+.render-log { padding:9px 0;border-bottom:1px solid #292929;font:11px/1.6 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:#bbb; }
+.render-kv { display:grid;grid-template-columns:minmax(90px,130px) 1fr;gap:8px;padding:7px 0;border-bottom:1px solid #292929;font-size:11px; }
+.render-kv span:first-child { color:#888; }
+.render-status { display:inline-block;padding:3px 7px;border:1px solid #414141;border-radius:20px;color:#bbb;font-size:10px; }
+.render-form-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px; }
+.render-form-grid .field { margin-bottom:2px; }
+@media(max-width:520px) { .render-form-grid { grid-template-columns:1fr; } }
+
 </style>
 </head>
 <body>
@@ -326,6 +347,7 @@ textarea.field { resize:vertical;line-height:1.5; }
       <button class="side-link" data-view="github">⌂ <span>GitHub и репозитории</span></button>
       <button class="side-link" data-view="files">▤ <span>Файлы проекта</span></button>
       <button class="side-link" data-view="profile">◉ <span>Профиль</span></button>
+      <button class="side-link" data-view="render">◈ <span>Render Manager</span></button>
     </div>
 
     <div class="account" id="accountButton">
@@ -478,6 +500,61 @@ textarea.field { resize:vertical;line-height:1.5; }
         <div class="card">
           <h3>История</h3>
           <button class="btn btn-danger" id="clearHistoryBtn">Очистить историю текущего чата</button>
+        </div>
+      </div></div>
+    </section>
+
+    <section class="workspace" id="view-render">
+      <div class="section-scroll"><div class="section-inner">
+        <div class="section-heading">
+          <h2>Render Manager</h2>
+          <p>Управление сервисами, деплоями, логами и переменными окружения Render.</p>
+        </div>
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <h3 style="margin:0">Сервисы</h3>
+            <button class="btn" id="renderRefreshBtn">Обновить</button>
+          </div>
+          <div class="result" id="renderServicesMessage">Загрузка сервисов Render...</div>
+          <div class="render-service-list" id="renderServiceList"></div>
+        </div>
+        <div class="card" id="renderDetailsCard">
+          <h3>Выбранный сервис</h3>
+          <div class="result" id="renderServiceDetails">Выбери сервис из списка.</div>
+          <div class="actions">
+            <button class="btn btn-blue" id="renderDeployBtn" disabled>Запустить деплой</button>
+            <button class="btn" id="renderRestartBtn" disabled>Перезапустить</button>
+          </div>
+          <div class="render-tabs" style="margin-top:15px">
+            <button class="render-tab active" data-render-tab="overview">Обзор</button>
+            <button class="render-tab" data-render-tab="deploys">Деплои</button>
+            <button class="render-tab" data-render-tab="logs">Логи</button>
+            <button class="render-tab" data-render-tab="env">Переменные</button>
+          </div>
+          <div id="renderTabContent" class="result">Выбери сервис, чтобы посмотреть подробности.</div>
+        </div>
+        <div class="card">
+          <h3>Создать Web Service</h3>
+          <div class="result">Создание сервиса из GitHub-репозитория. Команды сборки и запуска должны соответствовать проекту.</div>
+          <select class="field" id="renderOwnerSelect"><option value="">Загрузка workspace...</option></select>
+          <div class="render-form-grid">
+            <input class="field" id="renderNewName" placeholder="Имя сервиса">
+            <input class="field" id="renderNewRepo" placeholder="https://github.com/user/repo">
+            <input class="field" id="renderNewBranch" value="main" placeholder="Ветка">
+            <select class="field" id="renderNewRuntime">
+              <option value="python">Python</option><option value="node">Node</option>
+              <option value="docker">Docker</option><option value="go">Go</option>
+              <option value="ruby">Ruby</option><option value="rust">Rust</option><option value="elixir">Elixir</option>
+            </select>
+            <input class="field" id="renderBuildCommand" value="pip install -r requirements.txt" placeholder="Build command">
+            <input class="field" id="renderStartCommand" value="python main.py" placeholder="Start command">
+            <select class="field" id="renderNewPlan">
+              <option value="free">Free</option><option value="starter">Starter</option>
+              <option value="standard">Standard</option><option value="pro">Pro</option><option value="pro_plus">Pro Plus</option>
+            </select>
+          </div>
+          <div class="actions"><button class="btn btn-blue" id="renderCreateBtn">Создать сервис</button></div>
+          <div class="result" id="renderCreateResult"></div>
         </div>
       </div></div>
     </section>
@@ -721,17 +798,312 @@ function switchView(name) {
   if (target) target.classList.add("active");
   const titles = {
     chat:activeChat()?.title || "Новый чат",
-    terminal:"Терминал",github:"GitHub",files:"Файлы проекта",profile:"Профиль"
+    terminal:"Терминал",github:"GitHub",files:"Файлы проекта",profile:"Профиль",render:"Render Manager"
   };
   $("topTitle").textContent = titles[name] || "Gubka-GPT";
   if (window.innerWidth <= 760) closeSidebar();
   if (name === "github") loadRepos();
   if (name === "files") loadFiles();
+  if (name === "render") { loadRenderServices(); loadRenderOwners(); }
 }
 document.querySelectorAll(".side-link").forEach(btn=>{
   btn.onclick = ()=>switchView(btn.dataset.view);
 });
 $("accountButton").onclick = ()=>switchView("profile");
+
+
+/* ===================== RENDER MANAGER ===================== */
+let renderServices = [];
+let renderSelectedServiceId = "";
+let renderCurrentTab = "overview";
+
+function renderText(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  return String(value);
+}
+function renderDate(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString();
+}
+function renderStatus(value) {
+  return '<span class="render-status">' + escapeRenderHtml(renderText(value)) + '</span>';
+}
+function escapeRenderHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, ch => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[ch]));
+}
+function selectedRenderService() {
+  return renderServices.find(s => s.id === renderSelectedServiceId) || null;
+}
+async function loadRenderServices() {
+  const message = $("renderServicesMessage");
+  const list = $("renderServiceList");
+  if (!message || !list) return;
+  showResult(message, "Загружаем сервисы Render...");
+  try {
+    const data = await api("/api/render/services");
+    renderServices = Array.isArray(data.services) ? data.services : [];
+    list.innerHTML = "";
+    if (!renderServices.length) {
+      showResult(message, "Сервисы не найдены. Можно создать Web Service ниже.");
+      renderSelectedServiceId = "";
+      renderUpdateSelected();
+      return;
+    }
+    showResult(message, "Найдено сервисов: " + renderServices.length, "success");
+    renderServices.forEach(service => {
+      if (!service || !service.id) return;
+      const btn = document.createElement("button");
+      btn.className = "render-service-item" + (service.id === renderSelectedServiceId ? " active" : "");
+      const name = document.createElement("div");
+      name.className = "render-service-name";
+      name.textContent = service.name || service.id;
+      const meta = document.createElement("div");
+      meta.className = "render-service-meta";
+      meta.textContent = [service.type, service.branch, service.id].filter(Boolean).join(" · ");
+      btn.append(name, meta);
+      btn.onclick = () => {
+        renderSelectedServiceId = service.id;
+        renderUpdateSelected();
+        renderLoadTab("overview");
+        list.querySelectorAll(".render-service-item").forEach(el => el.classList.remove("active"));
+        btn.classList.add("active");
+      };
+      list.append(btn);
+    });
+    if (!renderSelectedServiceId || !renderServices.some(s => s.id === renderSelectedServiceId)) {
+      renderSelectedServiceId = renderServices[0].id;
+    }
+    renderUpdateSelected();
+    await renderLoadTab(renderCurrentTab);
+  } catch(e) {
+    showResult(message, "Не удалось загрузить Render: " + e.message, "error");
+    list.innerHTML = "";
+    renderUpdateSelected();
+  }
+}
+async function loadRenderOwners() {
+  const select = $("renderOwnerSelect");
+  if (!select) return;
+  select.innerHTML = '<option value="">Загрузка workspace...</option>';
+  try {
+    const data = await api("/api/render/owners");
+    const owners = Array.isArray(data.owners) ? data.owners : [];
+    select.innerHTML = '<option value="">Выбери workspace</option>';
+    owners.forEach(owner => {
+      if (!owner || !owner.id) return;
+      const option = document.createElement("option");
+      option.value = owner.id;
+      option.textContent = (owner.name || owner.id) + (owner.type ? " · " + owner.type : "");
+      select.append(option);
+    });
+    if (!owners.length) select.innerHTML = '<option value="">Workspace не найдены</option>';
+  } catch(e) {
+    select.innerHTML = '<option value="">Ошибка загрузки workspace</option>';
+    showResult($("renderCreateResult"), e.message, "error");
+  }
+}
+function renderUpdateSelected() {
+  const service = selectedRenderService();
+  const details = $("renderServiceDetails");
+  const deploy = $("renderDeployBtn");
+  const restart = $("renderRestartBtn");
+  if (!service) {
+    details.textContent = "Выбери сервис из списка.";
+    deploy.disabled = true;
+    restart.disabled = true;
+    $("renderTabContent").textContent = "Выбери сервис, чтобы посмотреть подробности.";
+    return;
+  }
+  deploy.disabled = false;
+  restart.disabled = service.type === "cron_job";
+  details.innerHTML =
+    '<div class="render-kv"><span>Название</span><b>' + escapeRenderHtml(service.name || "—") + '</b></div>' +
+    '<div class="render-kv"><span>ID</span><span>' + escapeRenderHtml(service.id) + '</span></div>' +
+    '<div class="render-kv"><span>Тип</span><span>' + escapeRenderHtml(service.type) + '</span></div>' +
+    '<div class="render-kv"><span>Ветка</span><span>' + escapeRenderHtml(service.branch) + '</span></div>' +
+    '<div class="render-kv"><span>Репозиторий</span><span>' + escapeRenderHtml(service.repo) + '</span></div>' +
+    '<div class="render-kv"><span>Обновлён</span><span>' + escapeRenderHtml(renderDate(service.updated_at)) + '</span></div>' +
+    '<div class="render-kv"><span>URL</span><span>' +
+      (service.url ? '<a href="' + escapeRenderHtml(service.url) + '" target="_blank" rel="noopener" style="color:#8ab8ff">' + escapeRenderHtml(service.url) + '</a>' : "—") +
+    '</span></div>';
+}
+async function renderLoadTab(tab) {
+  renderCurrentTab = tab;
+  document.querySelectorAll(".render-tab").forEach(btn => btn.classList.toggle("active", btn.dataset.renderTab === tab));
+  const out = $("renderTabContent");
+  const service = selectedRenderService();
+  if (!service) { out.textContent = "Выбери сервис из списка."; return; }
+  out.textContent = "Загрузка...";
+  const base = "/api/render/services/" + encodeURIComponent(service.id);
+  try {
+    if (tab === "overview") {
+      const data = await api(base);
+      const latest = data.latest_deploy || {};
+      out.innerHTML =
+        '<div class="render-kv"><span>Последний деплой</span><span>' + renderStatus(latest.status || "нет данных") + '</span></div>' +
+        '<div class="render-kv"><span>Создан</span><span>' + escapeRenderHtml(renderDate(latest.created_at)) + '</span></div>' +
+        '<div class="render-kv"><span>Коммит</span><span>' + escapeRenderHtml(latest.commit_id || "—") + '</span></div>' +
+        '<div class="render-kv"><span>Сообщение</span><span>' + escapeRenderHtml(latest.commit_message || "—") + '</span></div>';
+    } else if (tab === "deploys") {
+      const data = await api(base + "/deploys?limit=20");
+      const deploys = Array.isArray(data.deploys) ? data.deploys : [];
+      out.innerHTML = "";
+      if (!deploys.length) { out.textContent = "История деплоев пуста."; return; }
+      deploys.forEach(d => {
+        const wrap = document.createElement("div");
+        wrap.className = "render-log";
+        const line = document.createElement("div");
+        line.textContent = (d.status || "unknown") + " · " + renderDate(d.created_at) + "\n" +
+          (d.commit_id || "") + (d.commit_message ? " — " + d.commit_message : "");
+        wrap.append(line);
+        if (d.id) {
+          const rollback = document.createElement("button");
+          rollback.className = "btn";
+          rollback.style.marginTop = "7px";
+          rollback.textContent = "Откатить на этот деплой";
+          rollback.onclick = async () => {
+            if (!confirm("Откатить сервис на выбранный деплой?")) return;
+            try {
+              await api(base + "/rollback", {method:"POST",body:JSON.stringify({deploy_id:d.id})});
+              showResult(out, "Запрос на откат отправлен Render.", "success");
+              await renderLoadTab("deploys");
+            } catch(e) { showResult(out, e.message, "error"); }
+          };
+          wrap.append(rollback);
+        }
+        out.append(wrap);
+      });
+    } else if (tab === "logs") {
+      const data = await api(base + "/logs?minutes=60&limit=50");
+      const logs = data.logs;
+      out.innerHTML = "";
+      const entries = Array.isArray(logs) ? logs : (logs && Array.isArray(logs.logs) ? logs.logs : []);
+      if (entries.length) {
+        entries.forEach(item => {
+          const line = document.createElement("div");
+          line.className = "render-log";
+          line.textContent = typeof item === "string" ? item : JSON.stringify(item);
+          out.append(line);
+        });
+      } else {
+        out.textContent = logs ? JSON.stringify(logs, null, 2) : "Логи за последний час не найдены.";
+      }
+    } else if (tab === "env") {
+      const data = await api(base + "/env");
+      const keys = Array.isArray(data.env_vars) ? data.env_vars : [];
+      out.innerHTML = '<div class="result">Render возвращает только имена переменных. Значения не загружаются и не отображаются.</div>';
+      const list = document.createElement("div");
+      keys.forEach(item => {
+        const row = document.createElement("div");
+        row.className = "render-kv";
+        const key = document.createElement("span");
+        key.textContent = item.key;
+        const remove = document.createElement("button");
+        remove.className = "btn btn-danger";
+        remove.textContent = "Удалить";
+        remove.onclick = async () => {
+          if (!confirm("Удалить переменную " + item.key + "?")) return;
+          try {
+            await api(base + "/env/" + encodeURIComponent(item.key), {method:"DELETE"});
+            await renderLoadTab("env");
+          } catch(e) { alert("Не удалось удалить переменную: " + e.message); }
+        };
+        row.append(key, remove);
+        list.append(row);
+      });
+      if (!keys.length) {
+        const empty = document.createElement("div");
+        empty.className = "result";
+        empty.textContent = "Переменных пока нет.";
+        list.append(empty);
+      }
+      const form = document.createElement("div");
+      form.style.marginTop = "15px";
+      const keyInput = document.createElement("input");
+      keyInput.className = "field";
+      keyInput.placeholder = "ИМЯ_ПЕРЕМЕННОЙ";
+      keyInput.autocomplete = "off";
+      const valueInput = document.createElement("input");
+      valueInput.className = "field";
+      valueInput.type = "password";
+      valueInput.placeholder = "Значение (не отображается)";
+      valueInput.autocomplete = "new-password";
+      const save = document.createElement("button");
+      save.className = "btn btn-blue";
+      save.textContent = "Сохранить переменную";
+      save.onclick = async () => {
+        const key = keyInput.value.trim();
+        const value = valueInput.value;
+        if (!key || !value) { alert("Укажи имя и значение переменной."); return; }
+        save.disabled = true;
+        try {
+          await api(base + "/env/" + encodeURIComponent(key), {method:"PUT",body:JSON.stringify({value})});
+          valueInput.value = "";
+          keyInput.value = "";
+          await renderLoadTab("env");
+          alert("Переменная сохранена.");
+        } catch(e) { alert("Не удалось сохранить переменную: " + e.message); }
+        finally { save.disabled = false; }
+      };
+      form.append(keyInput, valueInput, save);
+      out.append(list, form);
+    }
+  } catch(e) {
+    showResult(out, "Ошибка: " + e.message, "error");
+  }
+}
+document.querySelectorAll(".render-tab").forEach(btn => {
+  btn.onclick = () => renderLoadTab(btn.dataset.renderTab);
+});
+$("renderRefreshBtn").onclick = loadRenderServices;
+$("renderDeployBtn").onclick = async () => {
+  const service = selectedRenderService();
+  if (!service || !confirm("Запустить новый деплой сервиса " + (service.name || service.id) + "?")) return;
+  try {
+    const data = await api("/api/render/services/" + encodeURIComponent(service.id) + "/deploy", {
+      method:"POST", body:JSON.stringify({clear_cache:false})
+    });
+    showResult($("renderTabContent"), data.message || "Запрос на деплой отправлен.", "success");
+    await renderLoadTab("deploys");
+  } catch(e) { showResult($("renderTabContent"), e.message, "error"); }
+};
+$("renderRestartBtn").onclick = async () => {
+  const service = selectedRenderService();
+  if (!service || !confirm("Перезапустить сервис " + (service.name || service.id) + "?")) return;
+  try {
+    const data = await api("/api/render/services/" + encodeURIComponent(service.id) + "/restart", {method:"POST",body:"{}"});
+    showResult($("renderTabContent"), data.message || "Запрос на перезапуск отправлен.", "success");
+  } catch(e) { showResult($("renderTabContent"), e.message, "error"); }
+};
+$("renderCreateBtn").onclick = async () => {
+  const payload = {
+    owner_id:$("renderOwnerSelect").value,
+    name:$("renderNewName").value.trim(),
+    repo:$("renderNewRepo").value.trim(),
+    branch:$("renderNewBranch").value.trim() || "main",
+    runtime:$("renderNewRuntime").value,
+    build_command:$("renderBuildCommand").value.trim(),
+    start_command:$("renderStartCommand").value.trim(),
+    plan:$("renderNewPlan").value
+  };
+  if (!payload.owner_id || !payload.name || !payload.repo || !payload.build_command || !payload.start_command) {
+    showResult($("renderCreateResult"), "Заполни workspace, имя, GitHub URL, build и start command.", "error");
+    return;
+  }
+  const btn = $("renderCreateBtn");
+  btn.disabled = true;
+  try {
+    await api("/api/render/services", {method:"POST",body:JSON.stringify(payload)});
+    showResult($("renderCreateResult"), "Запрос на создание сервиса отправлен Render.", "success");
+    $("renderNewName").value = "";
+    await loadRenderServices();
+  } catch(e) { showResult($("renderCreateResult"), e.message, "error"); }
+  finally { btn.disabled = false; }
+};
+/* =================== END RENDER MANAGER =================== */
 
 function renderChatList() {
   const list = $("chatList");
