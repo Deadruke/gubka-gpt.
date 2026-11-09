@@ -11,7 +11,7 @@ import time
 
 from datetime import datetime, timezone, timedelta
 from pathlib import PurePosixPath
-from urllib.parse import quote, parse_qsl
+from urllib.parse import quote, parse_qsl, urlsplit
 
 import aiohttp
 from aiohttp import web
@@ -51,7 +51,7 @@ ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
 RENDER_API_KEY = os.getenv("RENDER_API_KEY", "").strip()
 
 GITHUB_REPO = os.getenv(
-    "GITHUB_REPO", "Deadruke/gubka-gpt"
+    "GITHUB_REPO", "Deadruke/gubka-gpt."
 ).strip().strip("/")
 
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip()
@@ -769,13 +769,21 @@ async def render_request(
         "Content-Type": "application/json"
     }
 
-    return await request_json(
-        method,
-        RENDER_API + path,
-        headers=headers,
-        params=params,
-        payload=payload
-    )
+    try:
+        return await request_json(
+            method,
+            RENDER_API + path,
+            headers=headers,
+            params=params,
+            payload=payload
+        )
+    except Exception as exc:
+        match = re.search(r"HTTP (\d{3})", str(exc))
+        status = match.group(1) if match else "unknown"
+        # Do not expose Render response bodies: write endpoints can echo secrets.
+        raise RuntimeError(
+            f"Ошибка запроса к Render API (HTTP {status})."
+        ) from None
 
 
 async def render_list_services():
@@ -999,6 +1007,124 @@ async def render_deploy_service(
         "deploy": deploy,
         "message": "Render принял запрос на деплой."
     }
+
+
+async def render_list_owners():
+    data = await render_request("GET", "/owners", params={"limit": 100})
+    if not isinstance(data, list):
+        raise RuntimeError("Render вернул некорректный список workspace.")
+    owners = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        owner = item.get("owner", item)
+        if isinstance(owner, dict) and owner.get("id"):
+            owners.append({
+                "id": owner.get("id"),
+                "name": owner.get("name"),
+                "type": owner.get("type")
+            })
+    return owners
+
+
+async def render_get_env_keys(service_id):
+    service = await render_get_service(service_id)
+    data = await render_request(
+        "GET", f"/services/{quote(str(service_id), safe='')}/env-vars",
+        params={"limit": 100}
+    )
+    if not isinstance(data, list):
+        raise RuntimeError("Render вернул некорректный список env-переменных.")
+    # Intentionally discard values before data leaves this function.
+    keys = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        env = item.get("envVar", item)
+        if isinstance(env, dict) and env.get("key"):
+            keys.append({"key": str(env["key"])})
+    return {"service": service, "env_vars": keys}
+
+
+async def render_set_env_var(service_id, key, value):
+    await render_get_service(service_id)
+    key = str(key or "").strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,99}", key):
+        raise ValueError("Некорректное имя env-переменной.")
+    if not isinstance(value, str) or not value or len(value) > 10000:
+        raise ValueError("Значение переменной должно содержать 1–10000 символов.")
+    # Never return or log the submitted value.
+    await render_request(
+        "PUT",
+        f"/services/{quote(str(service_id), safe='')}/env-vars/{quote(key, safe='')}",
+        payload={"value": value}
+    )
+    return {"ok": True, "key": key}
+
+
+async def render_delete_env_var(service_id, key):
+    await render_get_service(service_id)
+    key = str(key or "").strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,99}", key):
+        raise ValueError("Некорректное имя env-переменной.")
+    await render_request(
+        "DELETE",
+        f"/services/{quote(str(service_id), safe='')}/env-vars/{quote(key, safe='')}"
+    )
+    return {"ok": True, "key": key}
+
+
+async def render_rollback_service(service_id, deploy_id):
+    await render_get_service(service_id)
+    deploy_id = str(deploy_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{5,120}", deploy_id):
+        raise ValueError("Некорректный ID деплоя для rollback.")
+    result = await render_request(
+        "POST",
+        f"/services/{quote(str(service_id), safe='')}/rollback",
+        payload={"deployId": deploy_id}
+    )
+    return {"ok": True, "result": result}
+
+
+async def render_create_web_service(owner_id, name, repo, branch, runtime, build_command, start_command, plan):
+    owner_id = str(owner_id or "").strip()
+    name = str(name or "").strip()
+    repo = str(repo or "").strip()
+    branch = str(branch or "main").strip()
+    runtime = str(runtime or "python").strip().lower()
+    plan = str(plan or "free").strip().lower()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{5,120}", owner_id):
+        raise ValueError("Некорректный workspace ID.")
+    owners = await render_list_owners()
+    if not any(str(o.get("id")) == owner_id for o in owners):
+        raise ValueError("Выбранный workspace недоступен этому Render API key.")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{1,62}", name):
+        raise ValueError("Имя сервиса: 2–63 символа, латиница, цифры и дефис.")
+    if not re.fullmatch(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?", repo):
+        raise ValueError("Укажи HTTPS URL GitHub-репозитория.")
+    if not re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", branch):
+        raise ValueError("Некорректное имя ветки.")
+    if runtime not in {"python", "node", "docker", "go", "ruby", "rust", "elixir"}:
+        raise ValueError("Неподдерживаемый runtime.")
+    if plan not in {"free", "starter", "standard", "pro", "pro_plus"}:
+        raise ValueError("Неподдерживаемый план Render.")
+    if not build_command or len(build_command) > 500 or not start_command or len(start_command) > 500:
+        raise ValueError("Build/start command обязателен (до 500 символов).")
+    payload = {
+        "type": "web_service", "name": name, "ownerId": owner_id,
+        "repo": repo, "branch": branch,
+        "serviceDetails": {
+            "env": runtime, "buildCommand": build_command,
+            "startCommand": start_command, "plan": plan
+        }
+    }
+    result = await render_request("POST", "/services", payload=payload)
+    service = result.get("service", result) if isinstance(result, dict) else {}
+    return {"ok": True, "service": {
+        "id": service.get("id"), "name": service.get("name"),
+        "type": service.get("type"), "branch": service.get("branch")
+    }}
 
 # =========================================================
 # AI TOOL EXECUTION
@@ -1769,20 +1895,38 @@ def verify_init_data(init_data):
 
 
 def web_user(request):
-    session_id = request.cookies.get(
-        "gubka_session",
-        ""
+    # GitHub OAuth is an additional credential, never a replacement for the
+    # Telegram allowlist identity that owns this single-user installation.
+    telegram_user = verify_init_data(
+        request.headers.get("X-Telegram-Init-Data", "")
     )
+    try:
+        telegram_id = int(telegram_user.get("id", 0))
+    except (TypeError, ValueError):
+        raise web.HTTPUnauthorized(text="Некорректный Telegram ID.")
+    if telegram_id != ALLOWED_USER_ID:
+        raise web.HTTPForbidden(text="Нет доступа к этому приложению.")
 
+    session_id = request.cookies.get("gubka_session", "")
     if session_id and session_id in sessions:
-        return get_authenticated_user(request)
+        github_user = get_authenticated_user(request)
+        github_user["telegram_user_id"] = telegram_id
+        return github_user
+    return telegram_user
 
-    return verify_init_data(
-        request.headers.get(
-            "X-Telegram-Init-Data",
-            ""
-        )
-    )
+
+def require_same_origin(request):
+    # Apply to mutating Render routes to prevent cross-site requests using
+    # the user's authenticated Telegram/GitHub browser session.
+    origin = request.headers.get("Origin", "")
+    expected = urlsplit(WEB_APP_URL)
+    actual = urlsplit(origin)
+    if not origin or not actual.scheme or not actual.netloc:
+        raise web.HTTPForbidden(text="Требуется same-origin запрос.")
+    if (actual.scheme.lower(), actual.netloc.lower()) != (
+        expected.scheme.lower(), expected.netloc.lower()
+    ):
+        raise web.HTTPForbidden(text="Запрос с другого origin запрещён.")
 
 # =========================================================
 # WEB MIDDLEWARE
@@ -2630,6 +2774,149 @@ async def api_cancel(request):
         "ok": True
     })
 
+
+# =========================================================
+# RENDER MANAGER HTTP API (separate from AI tools)
+# =========================================================
+
+async def api_render_owners(request):
+    web_user(request)
+    try:
+        return web.json_response({"ok": True, "owners": await render_list_owners()})
+    except Exception as exc:
+        raise web.HTTPBadGateway(text=str(exc)[:300])
+
+
+async def api_render_services(request):
+    web_user(request)
+    try:
+        return web.json_response({"ok": True, "services": await render_list_services()})
+    except Exception as exc:
+        raise web.HTTPBadGateway(text=str(exc)[:300])
+
+
+async def api_render_create_service(request):
+    web_user(request)
+    require_same_origin(request)
+    try:
+        body = await request.json()
+        result = await render_create_web_service(
+            body.get("owner_id"), body.get("name"), body.get("repo"),
+            body.get("branch", "main"), body.get("runtime", "python"),
+            body.get("build_command", "pip install -r requirements.txt"),
+            body.get("start_command", "python main.py"), body.get("plan", "free")
+        )
+        return web.json_response(result)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+    except Exception as exc:
+        raise web.HTTPBadGateway(text=str(exc)[:300])
+
+
+async def api_render_service(request):
+    web_user(request)
+    try:
+        service = await render_get_service(request.match_info["service_id"])
+        status = await render_service_status(service["id"])
+        return web.json_response({"ok": True, "service": service, "latest_deploy": status["latest_deploy"]})
+    except Exception as exc:
+        raise web.HTTPBadGateway(text=str(exc)[:300])
+
+
+async def api_render_deploys(request):
+    web_user(request)
+    try:
+        result = await render_list_deploys(request.match_info["service_id"], request.query.get("limit", 20))
+        return web.json_response({"ok": True, **result})
+    except Exception as exc:
+        raise web.HTTPBadGateway(text=str(exc)[:300])
+
+
+async def api_render_logs(request):
+    web_user(request)
+    try:
+        result = await render_get_logs(
+            request.match_info["service_id"],
+            request.query.get("minutes", 60), request.query.get("limit", 50)
+        )
+        return web.json_response({"ok": True, **result})
+    except Exception as exc:
+        raise web.HTTPBadGateway(text=str(exc)[:300])
+
+
+async def api_render_env_keys(request):
+    web_user(request)
+    try:
+        return web.json_response({"ok": True, **await render_get_env_keys(request.match_info["service_id"])})
+    except Exception as exc:
+        raise web.HTTPBadGateway(text=str(exc)[:300])
+
+
+async def api_render_set_env(request):
+    web_user(request)
+    require_same_origin(request)
+    try:
+        body = await request.json()
+        result = await render_set_env_var(
+            request.match_info["service_id"], request.match_info["env_key"], body.get("value")
+        )
+        return web.json_response(result)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+    except Exception as exc:
+        raise web.HTTPBadGateway(text=str(exc)[:300])
+
+
+async def api_render_delete_env(request):
+    web_user(request)
+    require_same_origin(request)
+    try:
+        result = await render_delete_env_var(
+            request.match_info["service_id"], request.match_info["env_key"]
+        )
+        return web.json_response(result)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+    except Exception as exc:
+        raise web.HTTPBadGateway(text=str(exc)[:300])
+
+
+async def api_render_deploy(request):
+    web_user(request)
+    require_same_origin(request)
+    try:
+        body = await request.json() if request.can_read_body else {}
+        result = await render_deploy_service(
+            request.match_info["service_id"], bool(body.get("clear_cache", False))
+        )
+        return web.json_response(result)
+    except Exception as exc:
+        raise web.HTTPBadGateway(text=str(exc)[:300])
+
+
+async def api_render_restart(request):
+    web_user(request)
+    require_same_origin(request)
+    try:
+        return web.json_response(await render_restart_service(request.match_info["service_id"]))
+    except Exception as exc:
+        raise web.HTTPBadGateway(text=str(exc)[:300])
+
+
+async def api_render_rollback(request):
+    web_user(request)
+    require_same_origin(request)
+    try:
+        body = await request.json()
+        result = await render_rollback_service(
+            request.match_info["service_id"], body.get("deploy_id")
+        )
+        return web.json_response(result)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+    except Exception as exc:
+        raise web.HTTPBadGateway(text=str(exc)[:300])
+
 # =========================================================
 # WEB SERVER
 # =========================================================
@@ -2675,6 +2962,19 @@ async def start_web_server():
     app.router.add_get("/api/pending", api_pending)
     app.router.add_post("/api/apply", api_apply)
     app.router.add_post("/api/cancel", api_cancel)
+
+    app.router.add_get("/api/render/owners", api_render_owners)
+    app.router.add_get("/api/render/services", api_render_services)
+    app.router.add_post("/api/render/services", api_render_create_service)
+    app.router.add_get("/api/render/services/{service_id}", api_render_service)
+    app.router.add_get("/api/render/services/{service_id}/deploys", api_render_deploys)
+    app.router.add_get("/api/render/services/{service_id}/logs", api_render_logs)
+    app.router.add_get("/api/render/services/{service_id}/env", api_render_env_keys)
+    app.router.add_put("/api/render/services/{service_id}/env/{env_key}", api_render_set_env)
+    app.router.add_delete("/api/render/services/{service_id}/env/{env_key}", api_render_delete_env)
+    app.router.add_post("/api/render/services/{service_id}/deploy", api_render_deploy)
+    app.router.add_post("/api/render/services/{service_id}/restart", api_render_restart)
+    app.router.add_post("/api/render/services/{service_id}/rollback", api_render_rollback)
 
     app.router.add_post(
         "/api/create-repo",
