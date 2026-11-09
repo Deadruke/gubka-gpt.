@@ -42,6 +42,19 @@ XAI_API_KEY = os.getenv("XAI_API_KEY", "").strip()
 CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
 CLOUDFLARE_MODEL = os.getenv("CLOUDFLARE_MODEL", "@cf/zai-org/glm-4.7-flash").strip()
+
+# Independent OpenAI-compatible providers. Model IDs can be overridden in Render.
+NOVITA_API_KEY = os.getenv("NOVITA_API_KEY", "").strip()
+UPSTAGE_API_KEY = os.getenv("UPSTAGE_API_KEY", "").strip()
+DEEPINFRA_API_KEY = os.getenv("DEEPINFRA_API_KEY", "").strip()
+SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "").strip()
+RUNAIICLOUD_API_KEY = os.getenv("RUNAIICLOUD_API_KEY", "").strip()
+
+NOVITA_MODEL = os.getenv("NOVITA_MODEL", "deepseek/deepseek-v4.1-flash-1017").strip()
+UPSTAGE_MODEL = os.getenv("UPSTAGE_MODEL", "solar-pro4").strip()
+DEEPINFRA_MODEL = os.getenv("DEEPINFRA_MODEL", "deepseek-ai/DeepSeek-V4-Flash-0731").strip()
+SILICONFLOW_MODEL = os.getenv("SILICONFLOW_MODEL", "deepseek-ai/DeepSeek-V4-Pro").strip()
+RUNAIICLOUD_MODEL = os.getenv("RUNAIICLOUD_MODEL", "deepseek-v4-flash").strip()
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
 
@@ -70,14 +83,36 @@ MODEL_CATALOG_TTL = 900
 MODELS_PER_PROVIDER = 15
 MODEL_PROVIDERS = {
     "openrouter": "OpenRouter · бесплатные модели с tools",
+    "novita": "Novita AI",
+    "upstage": "Upstage AI",
+    "deepinfra": "DeepInfra",
+    "siliconflow": "SiliconFlow",
+    "runaii": "RunAii Cloud",
     "cloudflare": "Cloudflare Workers AI",
     "xai": "xAI Grok · платный резерв",
 }
 
 DIRECT_MODELS = {
+    "novita": [(NOVITA_MODEL, "DeepSeek V4.1 Flash · Novita")],
+    "upstage": [(UPSTAGE_MODEL, "Solar Pro 4 · Upstage")],
+    "deepinfra": [(DEEPINFRA_MODEL, "DeepSeek V4 Flash · DeepInfra")],
+    "siliconflow": [(SILICONFLOW_MODEL, "DeepSeek V4 Pro · SiliconFlow")],
+    "runaii": [(RUNAIICLOUD_MODEL, "DeepSeek V4 Flash · RunAii")],
     "cloudflare": [(CLOUDFLARE_MODEL, "Cloudflare GLM / Workers AI")],
     "xai": [("grok-4.7", "Grok 4.7 · платный резерв")],
 }
+
+PROVIDER_COOLDOWN_SECONDS = {
+    "rate_limit": 90,
+    "auth": 900,
+    "billing": 900,
+    "temporary": 35,
+    "model": 180,
+    "unknown": 45,
+}
+provider_cooldowns = {}
+provider_rotation_index = 0
+provider_rotation_lock = asyncio.Lock()
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=240, connect=20, sock_read=210)
 
@@ -95,16 +130,31 @@ for key, value in {
 
 if not any((
     OPENROUTER_KEY,
+    NOVITA_API_KEY,
+    UPSTAGE_API_KEY,
+    DEEPINFRA_API_KEY,
+    SILICONFLOW_API_KEY,
+    RUNAIICLOUD_API_KEY,
     (CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID),
     XAI_API_KEY,
 )):
     raise RuntimeError(
-        "Добавь OPENROUTER_API_KEY и/или настрой Cloudflare либо XAI_API_KEY."
+        "Не задан ни один AI API-ключ. Добавь хотя бы один ключ провайдера в Render."
     )
 
 if not MODEL:
     if OPENROUTER_KEY:
         MODEL = "openrouter:openrouter/free"
+    elif NOVITA_API_KEY:
+        MODEL = "novita:" + NOVITA_MODEL
+    elif UPSTAGE_API_KEY:
+        MODEL = "upstage:" + UPSTAGE_MODEL
+    elif DEEPINFRA_API_KEY:
+        MODEL = "deepinfra:" + DEEPINFRA_MODEL
+    elif SILICONFLOW_API_KEY:
+        MODEL = "siliconflow:" + SILICONFLOW_MODEL
+    elif RUNAIICLOUD_API_KEY:
+        MODEL = "runaii:" + RUNAIICLOUD_MODEL
     elif CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID:
         MODEL = "cloudflare:" + CLOUDFLARE_MODEL
     elif XAI_API_KEY:
@@ -1341,6 +1391,35 @@ async def get_available_models(force_refresh=False):
             # Cloudflare/Grok remain available if OpenRouter's catalogue is down.
             pass
 
+    direct_provider_keys = {
+        "novita": (NOVITA_API_KEY, NOVITA_MODEL),
+        "upstage": (UPSTAGE_API_KEY, UPSTAGE_MODEL),
+        "deepinfra": (DEEPINFRA_API_KEY, DEEPINFRA_MODEL),
+        "siliconflow": (SILICONFLOW_API_KEY, SILICONFLOW_MODEL),
+        "runaii": (RUNAIICLOUD_API_KEY, RUNAIICLOUD_MODEL),
+    }
+    direct_names = {
+        "novita": "DeepSeek V4.1 Flash · Novita",
+        "upstage": "Solar Pro 4 · Upstage",
+        "deepinfra": "DeepSeek V4 Flash · DeepInfra",
+        "siliconflow": "DeepSeek V4 Pro · SiliconFlow",
+        "runaii": "DeepSeek V4 Flash · RunAii",
+    }
+    for provider, (api_key, model_id) in direct_provider_keys.items():
+        if not api_key or not model_id:
+            continue
+        result.append({
+            "id": f"{provider}:{model_id}",
+            "name": direct_names[provider],
+            "provider": provider,
+            "provider_name": MODEL_PROVIDERS[provider],
+            "context_length": 0,
+            "free": False,
+            "tools": True,
+            "created": 0,
+            "pricing": {},
+        })
+
     if CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID:
         result.append({
             "id": f"cloudflare:{CLOUDFLARE_MODEL}",
@@ -1501,6 +1580,19 @@ async def _cloudflare_chat(model, messages, tools=None, max_tokens=None):
 
 
 async def _call_provider(provider, model, messages, tools=None, max_tokens=None):
+    """Dispatch one request to an independent provider's OpenAI-compatible API."""
+    endpoints = {
+        "novita": ("https://api.novita.ai/openai/v1/chat/completions", NOVITA_API_KEY),
+        "upstage": ("https://api.upstage.ai/v1/chat/completions", UPSTAGE_API_KEY),
+        "deepinfra": ("https://api.deepinfra.com/v1/openai/chat/completions", DEEPINFRA_API_KEY),
+        "siliconflow": ("https://api.siliconflow.com/v1/chat/completions", SILICONFLOW_API_KEY),
+        "runaii": ("https://api.runaii.cloud/v1/chat/completions", RUNAIICLOUD_API_KEY),
+    }
+    if provider in endpoints:
+        url, api_key = endpoints[provider]
+        if not api_key:
+            raise RuntimeError("API-ключ не задан.")
+        return await _post_openai_compatible(url, api_key, model, messages, tools, max_tokens)
     if provider == "cloudflare":
         return await _cloudflare_chat(model, messages, tools, max_tokens)
     if provider == "openrouter":
@@ -1525,54 +1617,51 @@ async def _call_provider(provider, model, messages, tools=None, max_tokens=None)
 
 
 async def _provider_candidates():
-    """Build strict-tier fallback order: free OpenRouter, Cloudflare, paid Grok."""
+    """Return one configured model per provider in the stable rotation order."""
     try:
         catalog = await get_available_models()
     except Exception:
         catalog = []
 
-    candidates = []
-    for item in catalog:
-        if item.get("provider") == "openrouter" and item.get("free") is True and item.get("tools") is True:
-            model_id = str(item.get("id") or "")
-            if model_id.startswith("openrouter:"):
-                candidates.append(("openrouter", model_id.split(":", 1)[1]))
-
-    if CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID:
-        candidates.append(("cloudflare", CLOUDFLARE_MODEL))
-
-    if XAI_API_KEY:
-        xai_models = [
-            (str(item.get("id", "")).split(":", 1)[1], item)
-            for item in catalog
-            if item.get("provider") == "xai" and str(item.get("id", "")).startswith("xai:")
-        ]
-        if xai_models:
-            candidates.extend(("xai", model_id) for model_id, _ in xai_models)
-        else:
-            candidates.append(("xai", "grok-4.7"))
-
-    # The selected model is preferred only within its own tier. It can never
-    # promote a paid provider ahead of the free OpenRouter/Cloudflare tiers.
+    configured = []
+    provider_order = (
+        "openrouter", "novita", "upstage", "deepinfra", "siliconflow",
+        "runaii", "cloudflare", "xai",
+    )
     selected = current_model_context.get() or MODEL
-    if ":" in selected:
-        preferred_provider, preferred_model = selected.split(":", 1)
-        tier_indexes = [
-            i for i, (provider, _) in enumerate(candidates)
-            if provider == preferred_provider
-        ]
-        for i in tier_indexes:
-            if candidates[i] == (preferred_provider, preferred_model):
-                candidates.insert(tier_indexes[0], candidates.pop(i))
-                break
+    selected_provider, selected_model = selected.split(":", 1) if ":" in selected else ("", "")
 
-    unique = []
-    seen = set()
-    for pair in candidates:
-        if pair not in seen:
-            seen.add(pair)
-            unique.append(pair)
-    return unique
+    for provider in provider_order:
+        entries = [item for item in catalog if item.get("provider") == provider]
+        if not entries:
+            continue
+        chosen = next((item for item in entries if item.get("id") == selected), None)
+        if chosen is None:
+            # A provider is a single rotation slot. Do not count every model
+            # in a provider catalogue as a separate provider/key.
+            chosen = entries[0]
+        model_id = str(chosen.get("id") or "").split(":", 1)[-1]
+        if model_id:
+            configured.append((provider, model_id))
+
+    return configured
+
+
+def _provider_cooldown_kind(exc):
+    raw = str(exc).lower()
+    if any(x in raw for x in ("http 401", "unauthorized", "incorrect api key", "invalid api key")):
+        return "auth"
+    if any(x in raw for x in ("http 402", "payment_method_required", "insufficient_balance", "billing")):
+        return "billing"
+    if any(x in raw for x in ("http 429", "rate limit", "rate_limit", "temporarily rate-limited")):
+        return "rate_limit"
+    if any(x in raw for x in ("http 403", "tier_not_allowed", "permission")):
+        return "auth"
+    if any(x in raw for x in ("http 400", "http 404", "model_not_found", "unsupported")):
+        return "model"
+    if any(x in raw for x in ("http 5", "timeout", "timed out", "connection")):
+        return "temporary"
+    return "unknown"
 
 
 def _format_provider_error(provider, exc):
@@ -1585,7 +1674,7 @@ def _format_provider_error(provider, exc):
         return f"{provider}: требуется оплата/баланс — {raw[:320]}"
     if "http 403" in low or "tier_not_allowed" in low:
         return f"{provider}: модель/операция недоступна на текущем тарифе — {raw[:320]}"
-    if "http 429" in low:
+    if "http 429" in low or "rate limit" in low:
         return f"{provider}: превышен лимит запросов — {raw[:320]}"
     if "http 5" in low or "timeout" in low or "timed out" in low:
         return f"{provider}: временная ошибка/таймаут — {raw[:320]}"
@@ -1593,15 +1682,29 @@ def _format_provider_error(provider, exc):
 
 
 async def openrouter(messages, tools=None, max_tokens=None):
-    """Legacy function name retained; execute the configured fallback chain."""
-    requested = current_model_context.get() or MODEL
+    """Round-robin across configured providers; temporarily cool down failures."""
+    global provider_rotation_index
     configured = await _provider_candidates()
+    if not configured:
+        raise RuntimeError(
+            "Нет настроенных AI-провайдеров. Проверь API-ключи в Render Environment."
+        )
+
+    now = time.monotonic()
+    async with provider_rotation_lock:
+        # Drop expired cooldowns so recovered providers rejoin the rotation.
+        for name, until in list(provider_cooldowns.items()):
+            if until <= now:
+                provider_cooldowns.pop(name, None)
+
+        count = len(configured)
+        start_index = provider_rotation_index % count
+        provider_rotation_index = (provider_rotation_index + 1) % max(1, count)
+        rotated = configured[start_index:] + configured[:start_index]
+        ready = [pair for pair in rotated if provider_cooldowns.get(pair[0], 0) <= now]
 
     errors = []
-    skip_openrouter = False
-    for provider, model in configured:
-        if provider == "openrouter" and skip_openrouter:
-            continue
+    for provider, model in ready:
         try:
             data = await _call_provider(provider, model, messages, tools, max_tokens)
             choices = data.get("choices") or []
@@ -1618,37 +1721,39 @@ async def openrouter(messages, tools=None, max_tokens=None):
                 raise RuntimeError(
                     "Модель обрезала ответ из-за лимита токенов (finish_reason=length)."
                 )
-
             if not answer_text and not tool_calls:
-                raise RuntimeError(
-                    "Модель вернула пустой ответ без текста и вызовов инструментов."
-                )
+                raise RuntimeError("Модель вернула пустой ответ без текста и вызовов инструментов.")
 
+            # A successful request clears any stale cooldown for this provider.
+            provider_cooldowns.pop(provider, None)
             actual_model = data.get("model") or model
             last_model_context.set(f"{provider}:{actual_model}")
             return choice
         except Exception as exc:
             errors.append(_format_provider_error(provider, exc))
-            low_error = str(exc).lower()
-            # Authentication/permission/billing errors affect the whole
-            # OpenRouter account, so do not waste requests on every model.
-            if provider == "openrouter" and any(
-                marker in low_error
-                for marker in ("http 401", "http 402", "http 403", "unauthorized", "incorrect api key")
-            ):
-                skip_openrouter = True
-            # Rate limits and transient/model-specific failures rotate to the
-            # next free OpenRouter model before leaving that tier.
+            kind = _provider_cooldown_kind(exc)
+            cooldown = PROVIDER_COOLDOWN_SECONDS[kind]
+            provider_cooldowns[provider] = time.monotonic() + cooldown
             continue
 
-    if not configured:
+    if not ready:
+        soonest = min((provider_cooldowns.get(name, now) for name, _ in configured), default=now)
+        wait_seconds = max(1, int(soonest - now))
+        cooling = [name for name, _ in configured if provider_cooldowns.get(name, 0) > now]
         raise RuntimeError(
-            "Нет настроенных AI-провайдеров. Добавь OPENROUTER_API_KEY "
-            "или настрой Cloudflare/XAI_API_KEY в Render."
+            "Все AI-провайдеры временно на cooldown. "
+            f"Ближайший повтор через ~{wait_seconds} сек. Провайдеры: {', '.join(cooling)}."
         )
 
+    # Include providers already cooling down in the diagnostic, but don't call them.
+    cooling = [
+        f"{name}: cooldown ещё {max(1, int(until - time.monotonic()))} сек."
+        for name, until in provider_cooldowns.items()
+        if until > time.monotonic()
+    ]
+    details = errors + cooling
     raise RuntimeError(
-        "Все доступные резервные модели не ответили. " + " | ".join(errors)[:1800]
+        "Все доступные AI-провайдеры не ответили. " + " | ".join(details)[:2200]
     )
 
 
