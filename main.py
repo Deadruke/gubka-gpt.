@@ -59,7 +59,7 @@ WEB_APP_URL = os.getenv(
 ).strip().rstrip("/")
 
 PORT = int(os.getenv("PORT", "10000"))
-MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "4096"))
+MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "12288"))
 
 MAX_FILE_BYTES = 100_000
 MAX_HISTORY_MESSAGES = 40
@@ -79,7 +79,7 @@ DIRECT_MODELS = {
     "xai": [("grok-4.7", "Grok 4.7 · платный резерв")],
 }
 
-HTTP_TIMEOUT = aiohttp.ClientTimeout(total=120)
+HTTP_TIMEOUT = aiohttp.ClientTimeout(total=240, connect=20, sock_read=210)
 
 GITHUB_API = "https://api.github.com"
 OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
@@ -113,7 +113,7 @@ if not MODEL:
         MODEL = ""
 
 ALLOWED_USER_ID = int(ALLOWED_USER_ID)
-MAX_OUTPUT_TOKENS = max(256, min(MAX_OUTPUT_TOKENS, 8192))
+MAX_OUTPUT_TOKENS = max(256, min(MAX_OUTPUT_TOKENS, 16384))
 
 if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", GITHUB_REPO):
     raise RuntimeError("GITHUB_REPO должен иметь формат owner/repository")
@@ -1606,11 +1606,27 @@ async def openrouter(messages, tools=None, max_tokens=None):
             data = await _call_provider(provider, model, messages, tools, max_tokens)
             choices = data.get("choices") or []
             if not choices:
-                raise RuntimeError("Провайдер вернул пустой ответ.")
+                raise RuntimeError("Провайдер вернул пустой ответ без choices.")
+
+            choice = choices[0]
+            message = choice.get("message") or {}
+            tool_calls = message.get("tool_calls") or []
+            answer_text = message_text(message)
+            finish_reason = str(choice.get("finish_reason") or "").lower()
+
+            if finish_reason == "length":
+                raise RuntimeError(
+                    "Модель обрезала ответ из-за лимита токенов (finish_reason=length)."
+                )
+
+            if not answer_text and not tool_calls:
+                raise RuntimeError(
+                    "Модель вернула пустой ответ без текста и вызовов инструментов."
+                )
 
             actual_model = data.get("model") or model
             last_model_context.set(f"{provider}:{actual_model}")
-            return choices[0]
+            return choice
         except Exception as exc:
             errors.append(_format_provider_error(provider, exc))
             low_error = str(exc).lower()
@@ -2333,7 +2349,10 @@ async def api_prepare(request):
 {end_marker}
 
 Каждый изменяемый файл — отдельный блок.
-Не используй троеточия и сокращения.
+Выводи ПОЛНОЕ содержимое каждого изменяемого файла, без пропусков,
+заглушек, троеточий и фраз «остальное без изменений».
+Не начинай выдавать файл, если не можешь завершить его целиком.
+Сохраняй существующую архитектуру и функции, меняй только необходимое.
 Не изменяй секреты и .env.
 Не более 5 файлов.
 """
@@ -2343,13 +2362,18 @@ async def api_prepare(request):
         choice = await openrouter([
             {
                 "role": "system",
-                "content": "Ты опытный разработчик. Выдавай полные файлы."
+                "content": (
+                    "Ты опытный разработчик. Возвращай только результат в заданном формате. "
+                    "Каждый изменяемый файл должен быть полным и пригодным к замене. "
+                    "Не сокращай код, не используй заглушки и не пропускай существующие "
+                    "части файлов. Если объём не помещается, не выдавай частичный результат."
+                )
             },
             {
                 "role": "user",
                 "content": prompt
             }
-        ])
+        ], max_tokens=MAX_OUTPUT_TOKENS)
     finally:
         current_model_context.reset(model_token)
 
@@ -2357,13 +2381,25 @@ async def api_prepare(request):
         choice.get("message", {})
     )
 
-    if (
-        choice.get("finish_reason") == "length"
-        or summary_marker not in output
-        or not output.rstrip().endswith(end_marker)
-    ):
+    if not output:
         raise web.HTTPBadGateway(
-            text="Ответ ИИ оказался неполным. Уменьши задачу."
+            text="ИИ вернул пустой ответ. Попробуй повторить задачу или выбрать другую модель."
+        )
+
+    if choice.get("finish_reason") == "length":
+        raise web.HTTPBadGateway(
+            text=(
+                "Ответ ИИ обрезан: модель достигла лимита токенов. "
+                "Уменьши объём задачи или раздели её на несколько этапов."
+            )
+        )
+
+    if summary_marker not in output or not output.rstrip().endswith(end_marker):
+        raise web.HTTPBadGateway(
+            text=(
+                "ИИ не завершил ответ в требуемом формате. "
+                "Возможно, задача слишком большая — раздели её на части и повтори."
+            )
         )
 
     summary_start = (
