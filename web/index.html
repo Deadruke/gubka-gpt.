@@ -382,6 +382,22 @@ textarea.field { resize:vertical;line-height:1.5; }
   .message { font-size:15px; }
   .side-link { font-size:14px; }
 }
+
+/* Уведомления о фактическом переключении AI-модели */
+.model-notice {
+  display:none;position:fixed;top:72px;right:18px;z-index:55;
+  width:min(420px,calc(100vw - 28px));padding:12px 14px;
+  border:1px solid #3b4b61;border-radius:12px;
+  background:#151b24;color:#dce8f7;
+  box-shadow:0 12px 35px #0009;font-size:12px;line-height:1.55;
+  white-space:pre-wrap;overflow-wrap:anywhere;
+}
+.model-notice.show { display:block;animation:appear .18s ease; }
+.model-notice.warning { border-color:#72572b;background:#211b10;color:#ffe2a8; }
+.model-notice strong { display:block;margin-bottom:3px;font-size:12px; }
+@media(max-width:760px) {
+  .model-notice { top:72px;right:10px;width:calc(100vw - 20px); }
+}
 </style>
 </head>
 <body>
@@ -435,6 +451,7 @@ textarea.field { resize:vertical;line-height:1.5; }
 
       <div class="top-status"><span class="status-dot" id="statusDot"></span><span id="connectionStatus">Подключение</span></div>
     </header>
+    <div class="model-notice" id="modelNotice" role="status" aria-live="polite"></div>
 
     <section class="workspace active" id="view-chat">
       <div class="chat-scroll" id="chatScroll">
@@ -1324,6 +1341,81 @@ attachmentInput.addEventListener("change",()=>{
   renderAttachmentPreview();
 });
 
+let modelNoticeTimer = null;
+let lastResponseModel = "";
+
+function showModelNotice(title, message, warning=false) {
+  const notice = $("modelNotice");
+  if (!notice) return;
+  notice.className = "model-notice show" + (warning ? " warning" : "");
+  notice.innerHTML = "";
+  const heading = document.createElement("strong");
+  heading.textContent = title;
+  const body = document.createElement("span");
+  body.textContent = message;
+  notice.append(heading, body);
+  if (modelNoticeTimer) clearTimeout(modelNoticeTimer);
+  modelNoticeTimer = setTimeout(() => {
+    notice.classList.remove("show");
+  }, 9000);
+}
+
+function responseModelName(data) {
+  const value = data?.model ?? data?.actual_model ?? data?.model_name ?? "";
+  if (typeof value === "string") return value.trim();
+  if (value && typeof value === "object") {
+    const provider = value.provider || data.provider || "";
+    const id = value.id || value.name || value.model || "";
+    return [provider, id].filter(Boolean).join(" / ");
+  }
+  return "";
+}
+
+function updateModelAfterResponse(data) {
+  const actualModel = responseModelName(data);
+  const provider = String(data?.model_provider || data?.provider || "").trim();
+  const requested = String(data?.requested_model || "").trim();
+  const paidFallback = data?.paid_fallback === true ||
+    data?.is_paid_fallback === true ||
+    /(^|[ /_-])(grok|xai)([ /_-]|$)/i.test(actualModel + " " + provider);
+  const previousResponseModel = lastResponseModel;
+  const changed = data?.model_changed === true ||
+    (Boolean(previousResponseModel) && Boolean(actualModel) && previousResponseModel !== actualModel);
+
+  if (actualModel) {
+    currentModel = actualModel;
+    if (provider) currentModelProvider = provider;
+    $("modelInfo").textContent = "Текущая модель: " + actualModel;
+    $("modelStatus").textContent = paidFallback ? "Платный резерв" : "Активна";
+    const matchingIndex = availableModels.findIndex(item =>
+      item.id === actualModel ||
+      (provider && item.id === actualModel && item.provider === provider) ||
+      (actualModel.endsWith(" / " + item.id) &&
+       (!provider || String(item.provider).toLowerCase() === provider.toLowerCase()))
+    );
+    if (matchingIndex >= 0) $("modelSelect").value = String(matchingIndex);
+    lastResponseModel = actualModel;
+  }
+
+  if (paidFallback) {
+    showModelNotice(
+      "⚠️ Используется платный резерв Grok",
+      "Бесплатные варианты не сработали или недоступны. Ответ получен через " +
+        (actualModel || provider || "Grok") +
+        ". Этот провайдер может тарифицироваться отдельно.",
+      true
+    );
+  } else if (changed || data?.model_changed === true) {
+    const from = requested || (previousResponseModel && previousResponseModel !== actualModel ? previousResponseModel : "");
+    showModelNotice(
+      "Модель автоматически переключена",
+      (from ? "Запрошенная модель: " + from + "\\n" : "") +
+        "Фактически отвечает: " + (actualModel || "модель, выбранная сервером") +
+        ". Переключение выполнено автоматически."
+    );
+  }
+}
+
 async function sendMessage() {
   const input = $("messageInput");
   const typedMessage = input.value.trim();
@@ -1400,10 +1492,7 @@ async function sendMessage() {
     });
     loading.remove();
     addMessage("assistant",String(data.answer ?? "Сервер не вернул ответ."));
-    if (data.model) {
-      currentModel = data.model;
-      $("modelInfo").textContent = "Текущая модель: "+data.model;
-    }
+    updateModelAfterResponse(data);
     requestCount++;
     localStorage.setItem(STATS_KEY+"_requests",String(requestCount));
     updateStats();
