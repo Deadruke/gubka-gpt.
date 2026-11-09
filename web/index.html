@@ -324,6 +324,64 @@ textarea.field { resize:vertical;line-height:1.5; }
 .render-form-grid .field { margin-bottom:2px; }
 @media(max-width:520px) { .render-form-grid { grid-template-columns:1fr; } }
 
+/* Чёрная тема и увеличенные элементы для мобильных экранов */
+:root { --bg:#000; --side:#080808; --panel:#101010; }
+.attach-btn {
+  width:44px;height:44px;flex-shrink:0;border:1px solid #383838;
+  border-radius:12px;background:#171717;color:#ddd;font-size:23px;
+  display:grid;place-items:center;
+}
+.attach-btn:active { background:#292929; }
+.attachment-input { display:none; }
+.attachment-preview {
+  display:none;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:0 4px 9px;color:#bbb;font-size:13px;
+}
+.attachment-preview.show { display:flex; }
+.attachment-chip {
+  display:inline-flex;align-items:center;gap:7px;max-width:100%;
+  padding:7px 10px;border:1px solid #383838;border-radius:10px;
+  background:#171717;color:#ddd;
+}
+.attachment-chip span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px; }
+.attachment-remove { border:0;background:transparent;color:#aaa;font-size:17px;padding:0 2px; }
+@media(max-width:760px) {
+  .sidebar { width:min(320px,88vw);padding:17px; }
+  .sidebar-top { margin-bottom:22px; }
+  .brand-name { font-size:18px; }
+  .logo { width:42px;height:42px;font-size:21px; }
+  .new-chat,.login-side { padding:15px;font-size:15px;border-radius:12px; }
+  .side-label { font-size:12px;margin:15px 8px 10px; }
+  .chat-item { font-size:14px;padding:13px 11px; }
+  .side-link { font-size:15px;padding:14px 11px;gap:13px; }
+  .icon-btn { width:44px;height:44px;font-size:23px; }
+  .topbar { min-height:66px;padding:0 11px;gap:8px; }
+  .top-title { font-size:15px; }
+  #modelSelect { min-width:100px;max-width:145px;padding:9px 24px 9px 9px;font-size:11px; }
+  .chat-scroll { padding:22px 15px; }
+  .message { max-width:96%;font-size:16px;padding:15px 17px;line-height:1.65; }
+  .message-label { font-size:12px; }
+  .welcome { padding-top:10vh; }
+  .welcome h1 { font-size:27px; }
+  .welcome p { font-size:15px; }
+  .composer-area { padding:11px 12px 15px; }
+  .composer { gap:8px;padding:9px;border-radius:18px; }
+  #messageInput { min-height:46px;font-size:18px;padding:10px 0; }
+  .send-btn,.attach-btn { width:46px;height:46px;font-size:23px;border-radius:13px; }
+  .composer-note { font-size:11px;margin-top:9px; }
+  .attachment-preview { font-size:14px; }
+  .attachment-chip span { max-width:190px; }
+  .section-scroll { padding:21px 15px; }
+  .section-heading h2 { font-size:25px; }
+  .section-heading p { font-size:14px; }
+  .card { padding:19px;border-radius:16px; }
+  .card h3 { font-size:15px; }
+  .btn { padding:12px 15px;font-size:14px; }
+}
+@media(min-width:761px) {
+  .message { font-size:15px; }
+  .side-link { font-size:14px; }
+}
 </style>
 </head>
 <body>
@@ -390,11 +448,14 @@ textarea.field { resize:vertical;line-height:1.5; }
       </div>
       <div class="composer-area">
         <div class="composer-wrap">
+          <div class="attachment-preview" id="attachmentPreview"></div>
           <div class="composer">
+            <button class="attach-btn" id="attachFileBtn" type="button" title="Прикрепить файл" aria-label="Прикрепить файл">📎</button>
+            <input class="attachment-input" id="attachmentInput" type="file" multiple accept=".txt,.md,.json,.csv,.js,.ts,.py,.html,.css,.xml,.yaml,.yml,.log,.sql,.sh,text/plain,text/markdown,text/csv,application/json">
             <textarea id="messageInput" rows="1" enterkeyhint="send" placeholder="Напиши сообщение Gubka-GPT..."></textarea>
             <button class="send-btn" id="sendBtn" title="Отправить">↑</button>
           </div>
-          <div class="composer-note">Enter — отправить · Shift + Enter — новая строка</div>
+          <div class="composer-note">📎 Текстовые файлы до 8 КБ каждый · Enter — отправить · Shift + Enter — новая строка</div>
         </div>
       </div>
     </section>
@@ -1213,31 +1274,99 @@ async function loadHistory() {
   }
 }
 
+let selectedAttachments = [];
+const attachmentInput = $("attachmentInput");
+function renderAttachmentPreview() {
+  const preview = $("attachmentPreview");
+  preview.innerHTML = "";
+  if (!selectedAttachments.length) {
+    preview.classList.remove("show");
+    return;
+  }
+  selectedAttachments.forEach((file,index)=>{
+    const chip = document.createElement("div");
+    chip.className = "attachment-chip";
+    const name = document.createElement("span");
+    name.textContent = "📄 " + file.name;
+    const remove = document.createElement("button");
+    remove.className = "attachment-remove";
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label","Убрать файл");
+    remove.onclick = ()=>{
+      selectedAttachments.splice(index,1);
+      renderAttachmentPreview();
+    };
+    chip.append(name,remove);
+    preview.append(chip);
+  });
+  preview.classList.add("show");
+}
+$("attachFileBtn").onclick = ()=>attachmentInput.click();
+attachmentInput.addEventListener("change",()=>{
+  const allowed = /\.(txt|md|json|csv|js|ts|py|html|css|xml|ya?ml|log|sql|sh)$/i;
+  for (const file of Array.from(attachmentInput.files || [])) {
+    if (!allowed.test(file.name)) {
+      alert("Пока поддерживаются текстовые файлы, код, JSON, CSV и Markdown.");
+      continue;
+    }
+    if (file.size > 8192) {
+      alert("Файл «"+file.name+"» больше 8 КБ. Выбери файл поменьше.");
+      continue;
+    }
+    if (selectedAttachments.length >= 3) {
+      alert("Можно прикрепить не больше 3 файлов за раз.");
+      break;
+    }
+    if (!selectedAttachments.some(item=>item.name===file.name && item.size===file.size)) selectedAttachments.push(file);
+  }
+  attachmentInput.value = "";
+  renderAttachmentPreview();
+});
+
 async function sendMessage() {
   const input = $("messageInput");
-  const message = input.value.trim();
-  if (!message) return;
+  const typedMessage = input.value.trim();
+  const filesToSend = selectedAttachments.slice();
+  if (!typedMessage && !filesToSend.length) return;
+  let message = typedMessage || "Проанализируй прикреплённые файлы.";
+  let displayMessage = typedMessage || "Проанализируй прикреплённые файлы.";
+  if (filesToSend.length) {
+    const parts = [];
+    let totalChars = 0;
+    for (const file of filesToSend) {
+      const content = await file.text();
+      totalChars += content.length;
+      if (totalChars > 10000) {
+        alert("Суммарный объём текста файлов слишком большой. Прикрепи меньше файлов.");
+        return;
+      }
+      parts.push("===== ФАЙЛ: "+file.name+" =====\n"+content);
+    }
+    message += "\n\nПрикреплённые файлы:\n"+parts.join("\n\n");
+    displayMessage += (displayMessage ? "\n\n" : "") + "📎 " + filesToSend.map(file=>file.name).join(", ");
+  }
   const chatId = ensureChat();
 
-  if (message.startsWith("/edit ")) {
+  if (!filesToSend.length && message.startsWith("/edit ")) {
     input.value = "";
     addMessage("user",message);
     await prepareCode(message.slice(6).trim(),false);
     return;
   }
-  if (message === "/pending") {
+  if (!filesToSend.length && message === "/pending") {
     input.value = "";
     addMessage("user",message);
     await showPendingInChat();
     return;
   }
-  if (message === "/apply") {
+  if (!filesToSend.length && message === "/apply") {
     input.value = "";
     addMessage("user",message);
     await applyChanges(false);
     return;
   }
-  if (message === "/cancel") {
+  if (!filesToSend.length && message === "/cancel") {
     input.value = "";
     addMessage("user",message);
     await cancelChanges(false);
@@ -1246,14 +1375,17 @@ async function sendMessage() {
 
   const chat = activeChat();
   if (chat && chat.title === "Новый чат") {
-    chat.title = message.slice(0,38)+(message.length>38?"…":"");
+    const titleSource = typedMessage || filesToSend[0]?.name || "Файлы";
+    chat.title = titleSource.slice(0,38)+(titleSource.length>38?"…":"");
     $("topTitle").textContent = chat.title;
     saveStore();
     renderChatList();
   }
   input.value = "";
   input.style.height = "auto";
-  addMessage("user",message);
+  selectedAttachments = [];
+  renderAttachmentPreview();
+  addMessage("user",displayMessage);
   $("sendBtn").disabled = true;
   const loading = document.createElement("div");
   loading.className = "typing";
