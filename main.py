@@ -37,14 +37,11 @@ from oauth_auth import (
 # =========================================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
-OPENROUTER_KEY = os.getenv("OPENROUTER_KEY", "").strip()
+OPENROUTER_KEY = (os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_KEY", "")).strip()
 XAI_API_KEY = os.getenv("XAI_API_KEY", "").strip()
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "").strip()
 CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
 CLOUDFLARE_MODEL = os.getenv("CLOUDFLARE_MODEL", "@cf/zai-org/glm-4.7-flash").strip()
-SAMBANOVA_API_KEY = os.getenv("SAMBANOVA_API_KEY", "").strip()
-SAMBANOVA_ENABLED = os.getenv("SAMBANOVA_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
 
@@ -72,20 +69,14 @@ MAX_MESSAGE_LENGTH = 12000
 MODEL_CATALOG_TTL = 900
 MODELS_PER_PROVIDER = 15
 MODEL_PROVIDERS = {
-    "xai": "xAI Grok",
-    "mistral": "Mistral",
+    "openrouter": "OpenRouter · бесплатные модели с tools",
     "cloudflare": "Cloudflare Workers AI",
-    "sambanova": "SambaNova",
-    "openrouter": "OpenRouter",
+    "xai": "xAI Grok · платный резерв",
 }
 
 DIRECT_MODELS = {
-    # Fallback values only. xAI/Mistral are refreshed from their model APIs
-    # when possible; Cloudflare uses the verified Workers AI model id.
-    "xai": [("grok-4.7", "Grok 4.7")],
-    "mistral": [("mistral-small-latest", "Mistral Small")],
     "cloudflare": [(CLOUDFLARE_MODEL, "Cloudflare GLM / Workers AI")],
-    "sambanova": [("Meta-Llama-3.3-70B-Instruct", "Llama 3.3 70B")],
+    "xai": [("grok-4.7", "Grok 4.7 · платный резерв")],
 }
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=120)
@@ -102,21 +93,24 @@ for key, value in {
     if not value:
         raise RuntimeError(f"Не задана переменная Render: {key}")
 
-if not any((OPENROUTER_KEY, XAI_API_KEY, MISTRAL_API_KEY,
-            (CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID),
-            (SAMBANOVA_API_KEY and SAMBANOVA_ENABLED))):
-    raise RuntimeError("Добавь хотя бы один AI API ключ в переменные Render.")
+if not any((
+    OPENROUTER_KEY,
+    (CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID),
+    XAI_API_KEY,
+)):
+    raise RuntimeError(
+        "Добавь OPENROUTER_API_KEY и/или настрой Cloudflare либо XAI_API_KEY."
+    )
 
 if not MODEL:
-    MODEL = "xai:grok-4.7" if XAI_API_KEY else (
-        "mistral:mistral-large-latest" if MISTRAL_API_KEY else (
-            "cloudflare:" + CLOUDFLARE_MODEL if CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID else (
-                "sambanova:Meta-Llama-3.3-70B-Instruct" if SAMBANOVA_API_KEY and SAMBANOVA_ENABLED else (
-                    "openrouter:openrouter/free" if OPENROUTER_KEY else ""
-                )
-            )
-        )
-    )
+    if OPENROUTER_KEY:
+        MODEL = "openrouter:openrouter/free"
+    elif CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID:
+        MODEL = "cloudflare:" + CLOUDFLARE_MODEL
+    elif XAI_API_KEY:
+        MODEL = "xai:grok-4.7"
+    else:
+        MODEL = ""
 
 ALLOWED_USER_ID = int(ALLOWED_USER_ID)
 MAX_OUTPUT_TOKENS = max(256, min(MAX_OUTPUT_TOKENS, 8192))
@@ -1283,12 +1277,8 @@ async def execute_tool(name, args):
 # =========================================================
 
 async def get_available_models(force_refresh=False):
-    """Build a model catalogue from provider APIs without letting one broken
-    provider hide the others.
-
-    Direct providers are queried for models available to the *current API key*.
-    This is especially important for Mistral, where subscription/tier access
-    can differ from the public model list.
+    """Return only confirmed free OpenRouter text models with tool support,
+    followed by the Cloudflare fallback and paid Grok emergency fallback.
     """
     now = time.monotonic()
     cached = model_catalog_cache.get("models") or []
@@ -1297,9 +1287,74 @@ async def get_available_models(force_refresh=False):
 
     result = []
 
-    async def add_xai_models():
-        if not XAI_API_KEY:
-            return
+    if OPENROUTER_KEY:
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": WEB_APP_URL,
+            "X-Title": "Gubka GPT",
+        }
+        try:
+            data = await request_json(
+                "GET",
+                "https://openrouter.ai/api/v1/models",
+                headers=headers,
+            )
+            free_models = []
+            for item in data.get("data") or []:
+                if not isinstance(item, dict):
+                    continue
+                model_id = str(item.get("id") or "").strip()
+                supported = item.get("supported_parameters")
+                architecture = item.get("architecture") or {}
+                modality = str(architecture.get("modality") or "").lower()
+                pricing = item.get("pricing") or {}
+                try:
+                    prompt_price = float(pricing.get("prompt"))
+                    completion_price = float(pricing.get("completion"))
+                except (TypeError, ValueError):
+                    continue
+
+                # Do not assume tool support when OpenRouter omits metadata.
+                if not model_id or not isinstance(supported, list) or "tools" not in supported:
+                    continue
+                if "text" not in modality:
+                    continue
+                if prompt_price != 0 or completion_price != 0:
+                    continue
+
+                free_models.append({
+                    "id": "openrouter:" + model_id,
+                    "name": str(item.get("name") or model_id),
+                    "provider": "openrouter",
+                    "provider_name": MODEL_PROVIDERS["openrouter"],
+                    "context_length": int(item.get("context_length") or 0),
+                    "free": True,
+                    "tools": True,
+                    "created": int(item.get("created") or 0),
+                    "pricing": {"prompt": "0", "completion": "0"},
+                })
+
+            # Keep the API's ordering, but avoid an unmanageably large selector.
+            result.extend(free_models[:50])
+        except Exception:
+            # Cloudflare/Grok remain available if OpenRouter's catalogue is down.
+            pass
+
+    if CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID:
+        result.append({
+            "id": f"cloudflare:{CLOUDFLARE_MODEL}",
+            "name": "Cloudflare GLM 4.7 Flash",
+            "provider": "cloudflare",
+            "provider_name": MODEL_PROVIDERS["cloudflare"],
+            "context_length": 131072 if CLOUDFLARE_MODEL == "@cf/zai-org/glm-4.7-flash" else 0,
+            "free": False,
+            "tools": True,
+            "created": 0,
+            "pricing": {},
+        })
+
+    if XAI_API_KEY:
         try:
             data = await request_json(
                 "GET",
@@ -1314,11 +1369,11 @@ async def get_available_models(force_refresh=False):
                 model_id = str(item.get("id") or "").strip()
                 inputs = item.get("input_modalities") or []
                 outputs = item.get("output_modalities") or []
-                if not model_id or ("text" not in inputs) or ("text" not in outputs):
+                if not model_id or "text" not in inputs or "text" not in outputs:
                     continue
                 result.append({
                     "id": f"xai:{model_id}",
-                    "name": model_id,
+                    "name": model_id + " · платный резерв",
                     "provider": "xai",
                     "provider_name": MODEL_PROVIDERS["xai"],
                     "context_length": int(item.get("context_length") or 0),
@@ -1333,11 +1388,9 @@ async def get_available_models(force_refresh=False):
             if added == 0:
                 raise RuntimeError("xAI не вернул доступных текстовых моделей.")
         except Exception as exc:
-            # Keep the configured fallback so the provider can still be tried
-            # by the failover path; an invalid key will then be reported clearly.
             result.append({
                 "id": "xai:grok-4.7",
-                "name": "Grok 4.7",
+                "name": "Grok 4.7 · платный резерв",
                 "provider": "xai",
                 "provider_name": MODEL_PROVIDERS["xai"],
                 "context_length": 0,
@@ -1348,138 +1401,10 @@ async def get_available_models(force_refresh=False):
                 "catalog_error": str(exc)[:300],
             })
 
-    async def add_mistral_models():
-        if not MISTRAL_API_KEY:
-            return
-        try:
-            data = await request_json(
-                "GET",
-                "https://api.mistral.ai/v1/models",
-                headers={"Authorization": f"Bearer {MISTRAL_API_KEY}"},
-            )
-            models = data.get("data") or []
-            added = 0
-            for item in models:
-                if not isinstance(item, dict):
-                    continue
-                model_id = str(item.get("id") or "").strip()
-                capabilities = item.get("capabilities") or {}
-                if not model_id:
-                    continue
-                if item.get("archived") is True:
-                    continue
-                if capabilities.get("completion_chat") is not True:
-                    continue
-                # Gubka-GPT sends tools on every agent turn, so only expose
-                # models whose account reports function calling support.
-                if capabilities.get("function_calling") is not True:
-                    continue
-                result.append({
-                    "id": f"mistral:{model_id}",
-                    "name": model_id,
-                    "provider": "mistral",
-                    "provider_name": MODEL_PROVIDERS["mistral"],
-                    "context_length": int(item.get("max_context_length") or 0),
-                    "free": False,
-                    "tools": True,
-                    "created": int(item.get("created") or 0),
-                    "pricing": {},
-                })
-                added += 1
-                if added >= MODELS_PER_PROVIDER:
-                    break
-            if added == 0:
-                raise RuntimeError(
-                    "Mistral API не вернул доступной для этого ключа chat-модели с function calling."
-                )
-        except Exception as exc:
-            # Do not invent a tier-available model. The provider is omitted
-            # from the selectable catalogue until its account can list one.
-            pass
-
-    async def add_cloudflare_models():
-        if not (CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID):
-            return
-        # GLM-4.7-Flash is verified in the Workers AI catalogue and supports
-        # function calling. The OpenAI-compatible endpoint is used below.
-        result.append({
-            "id": f"cloudflare:{CLOUDFLARE_MODEL}",
-            "name": "Cloudflare GLM 4.7 Flash",
-            "provider": "cloudflare",
-            "provider_name": MODEL_PROVIDERS["cloudflare"],
-            "context_length": 131072 if CLOUDFLARE_MODEL == "@cf/zai-org/glm-4.7-flash" else 0,
-            "free": False,
-            "tools": True,
-            "created": 0,
-            "pricing": {},
-        })
-
-    async def add_sambanova_models():
-        if not (SAMBANOVA_API_KEY and SAMBANOVA_ENABLED):
-            return
-        result.append({
-            "id": "sambanova:Meta-Llama-3.3-70B-Instruct",
-            "name": "Llama 3.3 70B",
-            "provider": "sambanova",
-            "provider_name": MODEL_PROVIDERS["sambanova"],
-            "context_length": 0,
-            "free": False,
-            "tools": True,
-            "created": 0,
-            "pricing": {},
-        })
-
-    # These are independent. A broken key/tier on one provider must not
-    # prevent the catalogue from showing the others.
-    await asyncio.gather(
-        add_xai_models(),
-        add_mistral_models(),
-        add_cloudflare_models(),
-        add_sambanova_models(),
-    )
-
-    if OPENROUTER_KEY:
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": WEB_APP_URL,
-            "X-Title": "Gubka GPT",
-        }
-        try:
-            data = await request_json("GET", "https://openrouter.ai/api/v1/models", headers=headers)
-            for item in data.get("data") or []:
-                if not isinstance(item, dict):
-                    continue
-                model_id = str(item.get("id") or "")
-                supported = item.get("supported_parameters") or []
-                architecture = item.get("architecture") or {}
-                modality = str(architecture.get("modality") or "")
-                if not model_id or (modality and "text" not in modality):
-                    continue
-                if supported and "tools" not in supported:
-                    continue
-                pricing = item.get("pricing") or {}
-                prompt_price = str(pricing.get("prompt", ""))
-                completion_price = str(pricing.get("completion", ""))
-                prefix = model_id.split("/", 1)[0] if "/" in model_id else "openrouter"
-                result.append({
-                    "id": "openrouter:" + model_id,
-                    "name": str(item.get("name") or model_id),
-                    "provider": "openrouter",
-                    "provider_name": MODEL_PROVIDERS["openrouter"] + (" · " + prefix if prefix else ""),
-                    "context_length": int(item.get("context_length") or 0),
-                    "free": prompt_price in ("0", "0.0", "0.000000") and completion_price in ("0", "0.0", "0.000000"),
-                    "tools": "tools" in supported if supported else None,
-                    "created": int(item.get("created") or 0),
-                    "pricing": {"prompt": prompt_price, "completion": completion_price},
-                })
-        except Exception:
-            # Direct providers remain usable if OpenRouter is temporarily down.
-            pass
-
     if not result:
         raise RuntimeError(
-            "Нет доступных AI-провайдеров. Проверь ключи, тарифы и Account ID Cloudflare."
+            "Нет доступных AI-провайдеров. Добавь OPENROUTER_API_KEY "
+            "и/или настрой Cloudflare либо XAI_API_KEY."
         )
 
     model_catalog_cache["models"] = result
@@ -1576,35 +1501,6 @@ async def _cloudflare_chat(model, messages, tools=None, max_tokens=None):
 
 
 async def _call_provider(provider, model, messages, tools=None, max_tokens=None):
-    if provider == "xai":
-        return await _post_openai_compatible(
-            "https://api.x.ai/v1/chat/completions",
-            XAI_API_KEY,
-            model,
-            messages,
-            tools,
-            max_tokens,
-        )
-    if provider == "mistral":
-        return await _post_openai_compatible(
-            "https://api.mistral.ai/v1/chat/completions",
-            MISTRAL_API_KEY,
-            model,
-            messages,
-            tools,
-            max_tokens,
-        )
-    if provider == "sambanova":
-        if not SAMBANOVA_ENABLED:
-            raise RuntimeError("SambaNova временно отключена в Gubka-GPT.")
-        return await _post_openai_compatible(
-            "https://api.sambanova.ai/v1/chat/completions",
-            SAMBANOVA_API_KEY,
-            model,
-            messages,
-            tools,
-            max_tokens,
-        )
     if provider == "cloudflare":
         return await _cloudflare_chat(model, messages, tools, max_tokens)
     if provider == "openrouter":
@@ -1616,41 +1512,67 @@ async def _call_provider(provider, model, messages, tools=None, max_tokens=None)
             tools,
             max_tokens,
         )
+    if provider == "xai":
+        return await _post_openai_compatible(
+            "https://api.x.ai/v1/chat/completions",
+            XAI_API_KEY,
+            model,
+            messages,
+            tools,
+            max_tokens,
+        )
     raise RuntimeError("Неизвестный AI-провайдер: " + provider)
 
 
 async def _provider_candidates():
-    """Return one currently preferred model per enabled provider.
-
-    Model discovery is intentionally best-effort: the chat path must remain
-    usable even if a provider's /models endpoint is unavailable.
-    """
-    candidates = []
-
+    """Build strict-tier fallback order: free OpenRouter, Cloudflare, paid Grok."""
     try:
         catalog = await get_available_models()
     except Exception:
         catalog = []
 
-    by_provider = {}
+    candidates = []
     for item in catalog:
-        provider = item.get("provider")
-        if provider and provider not in by_provider:
-            by_provider[provider] = item.get("id", "").split(":", 1)[1] if ":" in item.get("id", "") else item.get("id")
+        if item.get("provider") == "openrouter" and item.get("free") is True and item.get("tools") is True:
+            model_id = str(item.get("id") or "")
+            if model_id.startswith("openrouter:"):
+                candidates.append(("openrouter", model_id.split(":", 1)[1]))
+
+    if CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID:
+        candidates.append(("cloudflare", CLOUDFLARE_MODEL))
 
     if XAI_API_KEY:
-        candidates.append(("xai", by_provider.get("xai", "grok-4.7")))
-    if MISTRAL_API_KEY and by_provider.get("mistral"):
-        candidates.append(("mistral", by_provider["mistral"]))
-    if CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID:
-        candidates.append(("cloudflare", by_provider.get("cloudflare", CLOUDFLARE_MODEL)))
-    if SAMBANOVA_API_KEY and SAMBANOVA_ENABLED:
-        candidates.append(("sambanova", by_provider.get("sambanova", "Meta-Llama-3.3-70B-Instruct"))
-    )
-    if OPENROUTER_KEY:
-        candidates.append(("openrouter", os.getenv("OPENROUTER_MODEL", "openrouter/free").strip()))
+        xai_models = [
+            (str(item.get("id", "")).split(":", 1)[1], item)
+            for item in catalog
+            if item.get("provider") == "xai" and str(item.get("id", "")).startswith("xai:")
+        ]
+        if xai_models:
+            candidates.extend(("xai", model_id) for model_id, _ in xai_models)
+        else:
+            candidates.append(("xai", "grok-4.7"))
 
-    return candidates
+    # The selected model is preferred only within its own tier. It can never
+    # promote a paid provider ahead of the free OpenRouter/Cloudflare tiers.
+    selected = current_model_context.get() or MODEL
+    if ":" in selected:
+        preferred_provider, preferred_model = selected.split(":", 1)
+        tier_indexes = [
+            i for i, (provider, _) in enumerate(candidates)
+            if provider == preferred_provider
+        ]
+        for i in tier_indexes:
+            if candidates[i] == (preferred_provider, preferred_model):
+                candidates.insert(tier_indexes[0], candidates.pop(i))
+                break
+
+    unique = []
+    seen = set()
+    for pair in candidates:
+        if pair not in seen:
+            seen.add(pair)
+            unique.append(pair)
+    return unique
 
 
 def _format_provider_error(provider, exc):
@@ -1671,60 +1593,46 @@ def _format_provider_error(provider, exc):
 
 
 async def openrouter(messages, tools=None, max_tokens=None):
-    """Legacy function name retained for compatibility; routes across providers."""
-    selected = current_model_context.get() or MODEL
-    if ":" in selected:
-        preferred_provider, preferred_model = selected.split(":", 1)
-    else:
-        preferred_provider, preferred_model = "openrouter", selected
-
+    """Legacy function name retained; execute the configured fallback chain."""
+    requested = current_model_context.get() or MODEL
     configured = await _provider_candidates()
 
-    # Preserve an explicitly selected model when that provider is enabled.
-    if any(p == preferred_provider for p, _ in configured):
-        configured = [
-            (preferred_provider, preferred_model),
-            *[(p, m) for p, m in configured if p != preferred_provider],
-        ]
-
-    # Never retry the same provider more than once for one logical turn.
-    seen = set()
-    ordered = []
-    for provider, model in configured:
-        key = (provider, model)
-        if key not in seen:
-            seen.add(key)
-            ordered.append(key)
-
     errors = []
-    for provider, model in ordered:
+    skip_openrouter = False
+    for provider, model in configured:
+        if provider == "openrouter" and skip_openrouter:
+            continue
         try:
-            data = await _call_provider(
-                provider,
-                model,
-                messages,
-                tools,
-                max_tokens,
-            )
+            data = await _call_provider(provider, model, messages, tools, max_tokens)
             choices = data.get("choices") or []
             if not choices:
                 raise RuntimeError("Провайдер вернул пустой ответ.")
 
-            last_model_context.set(f"{provider}:{data.get('model') or model}")
+            actual_model = data.get("model") or model
+            last_model_context.set(f"{provider}:{actual_model}")
             return choices[0]
-
         except Exception as exc:
             errors.append(_format_provider_error(provider, exc))
+            low_error = str(exc).lower()
+            # Authentication/permission/billing errors affect the whole
+            # OpenRouter account, so do not waste requests on every model.
+            if provider == "openrouter" and any(
+                marker in low_error
+                for marker in ("http 401", "http 402", "http 403", "unauthorized", "incorrect api key")
+            ):
+                skip_openrouter = True
+            # Rate limits and transient/model-specific failures rotate to the
+            # next free OpenRouter model before leaving that tier.
             continue
 
-    if not ordered:
+    if not configured:
         raise RuntimeError(
-            "Нет настроенных AI-провайдеров. Проверь переменные Render."
+            "Нет настроенных AI-провайдеров. Добавь OPENROUTER_API_KEY "
+            "или настрой Cloudflare/XAI_API_KEY в Render."
         )
 
     raise RuntimeError(
-        "Все подключённые AI-провайдеры не ответили. "
-        + " | ".join(errors)[:1800]
+        "Все доступные резервные модели не ответили. " + " | ".join(errors)[:1800]
     )
 
 
@@ -2195,7 +2103,9 @@ async def api_chat(request):
     uid = current_user_id(user)
     key = (uid, chat_id)
 
-    model_token = current_model_context.set(selected_model_for_user(uid))
+    requested_model = selected_model_for_user(uid)
+    model_token = current_model_context.set(requested_model)
+    last_model_context.set(requested_model)
     try:
         async with lock_for(key):
             history = web_histories.get(key, [])
@@ -2230,10 +2140,14 @@ async def api_chat(request):
     finally:
         current_model_context.reset(model_token)
 
+    requested_model = selected_model_for_user(uid)
     return web.json_response({
         "answer": answer,
         "chat_id": chat_id,
-        "model": used_model
+        "model": used_model,
+        "requested_model": requested_model,
+        "model_changed": bool(used_model and requested_model and used_model != requested_model),
+        "paid_fallback": bool(used_model and used_model.startswith("xai:")),
     })
 
 
