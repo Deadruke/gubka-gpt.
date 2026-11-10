@@ -149,11 +149,23 @@ button:disabled { opacity:.5; cursor:not-allowed; }
 .message-row.assistant .message { background:transparent;padding-left:0; }
 .message-label { font-size:10px;color:#888;margin-bottom:7px;font-weight:700;letter-spacing:.4px; }
 .message-row.user .message-label { color:#d6e6ff; }
-.message-content { white-space:pre-wrap;overflow-wrap:anywhere; }
-.message-content pre {
-  white-space:pre;overflow:auto;padding:13px;background:#111;
-  border:1px solid #353535;border-radius:10px;font-size:12px;
-}
+.message-content { white-space:normal;overflow-wrap:anywhere; }
+.message-content > *:first-child { margin-top:0; }
+.message-content > *:last-child { margin-bottom:0; }
+.message-content p { margin:0 0 11px;line-height:1.75; }
+.message-content h1,.message-content h2,.message-content h3 { line-height:1.35;letter-spacing:-.25px;margin:17px 0 9px;font-weight:750; }
+.message-content h1 { font-size:20px; }
+.message-content h2 { font-size:17px; }
+.message-content h3 { font-size:15px; }
+.message-content ul,.message-content ol { margin:7px 0 13px;padding-left:23px; }
+.message-content li { margin:5px 0;padding-left:3px;line-height:1.65; }
+.message-content blockquote { margin:10px 0;padding:8px 13px;border-left:3px solid #568fe8;background:rgba(255,255,255,.045);border-radius:0 8px 8px 0;color:#c7c7c7; }
+.message-content pre { white-space:pre;overflow:auto;margin:10px 0 13px;padding:13px;background:#111;border:1px solid #353535;border-radius:10px;font-size:12px;line-height:1.6; }
+.message-content code { padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.09);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em; }
+.message-content pre code { padding:0;background:transparent;font-size:inherit; }
+.message-content a { color:#83b4ff;text-decoration:none; }
+.message-content a:hover { text-decoration:underline; }
+.message-content hr { border:0;border-top:1px solid #353535;margin:15px 0; }
 .message-actions { display:flex;gap:8px;margin-top:9px; }
 .copy-btn {
   position:relative;width:36px;height:36px;display:grid;place-items:center;
@@ -422,6 +434,31 @@ textarea.field { resize:vertical;line-height:1.5; }
 .model-notice.show { display:block;animation:appear .18s ease; }
 .model-notice.warning { border-color:#72572b;background:#211b10;color:#ffe2a8; }
 .model-notice strong { display:block;margin-bottom:3px;font-size:12px; }
+/* Компактный монитор действий Gubka-GPT */
+.activity-monitor {
+  display:none;flex-shrink:0;max-width:790px;width:calc(100% - 36px);
+  margin:10px auto 0;padding:11px 13px;border:1px solid #343b45;
+  border-radius:12px;background:linear-gradient(135deg,rgba(37,48,62,.62),rgba(25,25,25,.92));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.035);
+}
+.activity-monitor.show { display:block; }
+.activity-head { display:flex;align-items:center;gap:9px;min-width:0; }
+.activity-pulse { width:8px;height:8px;flex-shrink:0;border-radius:50%;background:#55c98a;box-shadow:0 0 0 4px rgba(85,201,138,.12); }
+.activity-monitor.busy .activity-pulse { background:#78aaff;box-shadow:0 0 0 4px rgba(120,170,255,.13);animation:activityPulse 1.35s infinite; }
+.activity-monitor.failed .activity-pulse { background:#e17878;box-shadow:0 0 0 4px rgba(225,120,120,.12); }
+.activity-monitor.completed .activity-pulse { background:#55c98a; }
+@keyframes activityPulse { 50%{opacity:.38;box-shadow:0 0 0 7px rgba(120,170,255,0)} }
+.activity-stage { flex:1;min-width:0;color:#e6edf7;font-size:12px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.activity-state { color:#8d9bad;font-size:10px;white-space:nowrap; }
+.activity-detail { margin:6px 0 0 17px;color:#aeb8c6;font-size:11px;line-height:1.5;overflow-wrap:anywhere; }
+.activity-events { display:grid;gap:5px;margin:8px 0 0 17px;max-height:110px;overflow:auto; }
+.activity-event { display:flex;gap:8px;color:#8f9aaa;font-size:10px;line-height:1.4; }
+.activity-event::before { content:"";width:4px;height:4px;margin-top:4px;flex-shrink:0;border-radius:50%;background:#6f91bd; }
+.activity-event strong { color:#c7d2e0;font-weight:600; }
+@media(max-width:760px) {
+  .activity-monitor { width:calc(100% - 24px);margin-top:8px;padding:10px 11px; }
+  .activity-detail,.activity-events { margin-left:16px; }
+}
 @media(max-width:760px) {
   .model-notice { top:72px;right:10px;width:calc(100vw - 20px); }
 }
@@ -481,6 +518,15 @@ textarea.field { resize:vertical;line-height:1.5; }
     <div class="model-notice" id="modelNotice" role="status" aria-live="polite"></div>
 
     <section class="workspace active" id="view-chat">
+      <div class="activity-monitor" id="activityMonitor" role="status" aria-live="polite">
+        <div class="activity-head">
+          <span class="activity-pulse"></span>
+          <span class="activity-stage" id="activityStage">Ожидание действий</span>
+          <span class="activity-state" id="activityState">Мониторинг</span>
+        </div>
+        <div class="activity-detail" id="activityDetail">Здесь будут отображаться текущие действия Губки.</div>
+        <div class="activity-events" id="activityEvents"></div>
+      </div>
       <div class="chat-scroll" id="chatScroll">
         <div class="chat-inner" id="chatBox">
           <div class="welcome" id="welcome">
@@ -1297,6 +1343,60 @@ async function copyText(value) {
   if (!ok) throw new Error("Clipboard unavailable");
 }
 
+function escapeMarkdownHTML(value) {
+  return String(value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+
+function renderMarkdownInline(value) {
+  let html = escapeMarkdownHTML(value);
+  const code = [];
+  html = html.replace(/`([^`]+)`/g,(_,part)=>{
+    const token = "\u0000CODE"+code.length+"\u0000";
+    code.push("<code>"+part+"</code>");
+    return token;
+  });
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,(_,label,url)=>'<a href="'+url+'" target="_blank" rel="noopener noreferrer">'+label+'</a>');
+  html = html.replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>").replace(/__(.+?)__/g,"<strong>$1</strong>");
+  html = html.replace(/~~(.+?)~~/g,"<del>$1</del>");
+  html = html.replace(/(^|[^*])\*([^*\n]+)\*/g,"$1<em>$2</em>").replace(/(^|[^_])_([^_\n]+)_/g,"$1<em>$2</em>");
+  return html.replace(/\u0000CODE(\d+)\u0000/g,(_,i)=>code[Number(i)]||"");
+}
+
+function renderAssistantMarkdown(value) {
+  const source = String(value ?? "").replace(/\r\n?/g,"\n").trim();
+  if (!source) return "";
+  const lines = source.split("\n");
+  const out = [];
+  let paragraph = [], listType = "", listItems = [], quote = [], codeLines = [], inCode = false;
+  const flushParagraph = ()=>{ if (paragraph.length) { out.push("<p>"+renderMarkdownInline(paragraph.join(" "))+"</p>"); paragraph=[]; } };
+  const flushList = ()=>{ if (listItems.length) { out.push("<"+listType+">"+listItems.map(x=>"<li>"+renderMarkdownInline(x)+"</li>").join("")+"</"+listType+">"); listItems=[];listType=""; } };
+  const flushQuote = ()=>{ if (quote.length) { out.push("<blockquote>"+quote.map(x=>"<p>"+renderMarkdownInline(x)+"</p>").join("")+"</blockquote>");quote=[]; } };
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      flushParagraph();flushList();flushQuote();
+      if (inCode) { out.push("<pre><code>"+escapeMarkdownHTML(codeLines.join("\n"))+"</code></pre>");codeLines=[];inCode=false; }
+      else inCode=true;
+      continue;
+    }
+    if (inCode) { codeLines.push(line);continue; }
+    const trimmed=line.trim();
+    if (!trimmed) { flushParagraph();flushList();flushQuote();continue; }
+    const heading=trimmed.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) { flushParagraph();flushList();flushQuote();const n=heading[1].length;out.push("<h"+n+">"+renderMarkdownInline(heading[2])+"</h"+n+">");continue; }
+    if (/^([-*_])\1\1+\s*$/.test(trimmed)) { flushParagraph();flushList();flushQuote();out.push("<hr>");continue; }
+    const q=trimmed.match(/^>\s?(.*)$/);
+    if (q) { flushParagraph();flushList();quote.push(q[1]);continue; }
+    flushQuote();
+    const ul=trimmed.match(/^[-*+]\s+(.+)$/);
+    const ol=trimmed.match(/^\d+[.)]\s+(.+)$/);
+    if (ul||ol) { flushParagraph();const type=ul?"ul":"ol";if(listType&&listType!==type)flushList();listType=type;listItems.push((ul||ol)[1]);continue; }
+    flushList();paragraph.push(trimmed);
+  }
+  flushParagraph();flushList();flushQuote();
+  if (inCode) out.push("<pre><code>"+escapeMarkdownHTML(codeLines.join("\n"))+"</code></pre>");
+  return out.join("");
+}
+
 function addMessage(role,text) {
   $("welcome")?.remove();
   const row = document.createElement("div");
@@ -1308,7 +1408,8 @@ function addMessage(role,text) {
   label.textContent = role==="user" ? "ВЫ" : "GUBKA-GPT";
   const content = document.createElement("div");
   content.className = "message-content";
-  content.textContent = String(text ?? "");
+  if (role === "user") content.textContent = String(text ?? "");
+  else content.innerHTML = renderAssistantMarkdown(text);
   message.append(label,content);
   if (role !== "user") {
     const actions = document.createElement("div");
@@ -1481,6 +1582,108 @@ $("autopilotBtn").onclick = ()=>{
     : "Обычный режим";
 };
 
+// Мониторинг действий backend через GET /api/activity?chat_id=...&after=...
+let activityPollTimer = null;
+let activityRequestToken = 0;
+let activityLastEventId = 0;
+let activityCurrentChatId = "";
+
+function setActivityMonitorVisible(visible) {
+  const panel = $("activityMonitor");
+  if (panel) panel.classList.toggle("show", Boolean(visible));
+}
+
+function renderActivitySnapshot(payload) {
+  const data = payload?.activity && typeof payload.activity === "object" ? payload.activity : payload;
+  if (!data || typeof data !== "object") return;
+  const panel = $("activityMonitor");
+  const stage = $("activityStage");
+  const detail = $("activityDetail");
+  const state = $("activityState");
+  const eventsBox = $("activityEvents");
+  if (!panel || !stage || !detail || !state || !eventsBox) return;
+
+  const status = String(data.status || (data.active ? "running" : "idle")).toLowerCase();
+  const labels = {
+    running: "Выполняет задачу",
+    completed: "Задача завершена",
+    failed: "Ошибка выполнения",
+    cancelled: "Задача остановлена",
+    idle: "Ожидание действий"
+  };
+  stage.textContent = String(data.stage || labels[status] || "Работает");
+  detail.textContent = String(data.detail || (status === "completed" ? "Губка закончила работу." : status === "failed" ? "Во время выполнения возникла ошибка." : "Отслеживаю следующие действия..."));
+  state.textContent = labels[status] || (data.active ? "В процессе" : "Обновлено");
+  panel.classList.toggle("busy", Boolean(data.active) && !data.completed);
+  panel.classList.toggle("completed", status === "completed" || data.completed === true && status !== "failed");
+  panel.classList.toggle("failed", status === "failed");
+  setActivityMonitorVisible(Boolean(data.active) || Boolean(data.events?.length) || status === "completed" || status === "failed" || status === "cancelled");
+
+  const events = Array.isArray(data.events) ? data.events : [];
+  for (const event of events) {
+    const id = Number(event.id || 0);
+    if (id > activityLastEventId) activityLastEventId = id;
+    const eventKey = String(id || event.time || "") + "|" + String(event.stage || "") + "|" + String(event.detail || "");
+    if (!eventKey || eventsBox.dataset.lastKey === eventKey) continue;
+    const row = document.createElement("div");
+    row.className = "activity-event";
+    const message = document.createElement("span");
+    const heading = document.createElement("strong");
+    heading.textContent = String(event.stage || "Действие");
+    message.append(heading);
+    if (event.detail) message.append(document.createTextNode(" — " + String(event.detail)));
+    row.append(message);
+    eventsBox.append(row);
+    eventsBox.dataset.lastKey = eventKey;
+  }
+  while (eventsBox.children.length > 12) eventsBox.firstElementChild.remove();
+}
+
+function stopActivityMonitor() {
+  if (activityPollTimer) clearInterval(activityPollTimer);
+  activityPollTimer = null;
+}
+
+function startActivityMonitor(chatId) {
+  stopActivityMonitor();
+  activityRequestToken++;
+  const token = activityRequestToken;
+  activityCurrentChatId = String(chatId || "");
+  activityLastEventId = 0;
+  const eventsBox = $("activityEvents");
+  if (eventsBox) { eventsBox.replaceChildren(); delete eventsBox.dataset.lastKey; }
+  const panel = $("activityMonitor");
+  if (panel) panel.classList.remove("completed", "failed");
+  $("activityStage").textContent = "Подготовка задачи";
+  $("activityDetail").textContent = "Получаю информацию о действиях Губки...";
+  $("activityState").textContent = "Подключение";
+  panel?.classList.add("busy");
+  setActivityMonitorVisible(true);
+
+  const poll = async () => {
+    if (token !== activityRequestToken || !activityCurrentChatId) return;
+    try {
+      const query = new URLSearchParams({chat_id: activityCurrentChatId, after: String(activityLastEventId)});
+      const data = await api("/api/activity?" + query.toString());
+      if (token !== activityRequestToken) return;
+      renderActivitySnapshot(data);
+      if (data?.completed || data?.activity?.completed || ["completed", "failed", "cancelled"].includes(String(data?.status || data?.activity?.status || ""))) {
+        stopActivityMonitor();
+      }
+    } catch (error) {
+      // Не прерываем выполнение чата из-за временной ошибки мониторинга.
+      const message = String(error?.message || "");
+      if (/404|405|not found/i.test(message)) {
+        $("activityState").textContent = "Мониторинг недоступен";
+        $("activityDetail").textContent = "Сервер не нашёл маршрут /api/activity.";
+        stopActivityMonitor();
+      }
+    }
+  };
+  poll();
+  activityPollTimer = setInterval(poll, 900);
+}
+
 async function sendMessage() {
   const input = $("messageInput");
   const typedMessage = input.value.trim();
@@ -1544,6 +1747,7 @@ async function sendMessage() {
   renderAttachmentPreview();
   addMessage("user",displayMessage);
   $("sendBtn").disabled = true;
+  startActivityMonitor(chatId);
   const loading = document.createElement("div");
   loading.className = "typing";
   loading.textContent = "Gubka-GPT думает...";
@@ -1572,6 +1776,7 @@ async function sendMessage() {
     addMessage("assistant","Не удалось получить ответ: "+e.message);
   } finally {
     $("sendBtn").disabled = false;
+    // Мониторинг сам остановится, когда backend сообщит о завершении задачи.
   }
 }
 $("sendBtn").onclick = sendMessage;
