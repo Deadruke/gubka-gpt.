@@ -462,6 +462,22 @@ textarea.field { resize:vertical;line-height:1.5; }
 @media(max-width:760px) {
   .model-notice { top:72px;right:10px;width:calc(100vw - 20px); }
 }
+
+/* Память — компактное дополнение к существующему интерфейсу */
+.memory-toolbar { display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap; }
+.memory-toggle { display:flex;align-items:center;gap:10px;color:#ddd;font-size:13px; }
+.memory-toggle input { width:18px;height:18px;accent-color:var(--blue); }
+.memory-item { display:flex;align-items:flex-start;gap:10px;padding:12px 0;border-bottom:1px solid #292929; }
+.memory-item:last-child { border-bottom:0; }
+.memory-item-main { min-width:0;flex:1; }
+.memory-category { color:#8eaff0;font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px; }
+.memory-content { color:#ddd;font-size:13px;line-height:1.55;overflow-wrap:anywhere;white-space:pre-wrap; }
+.memory-date { color:#777;font-size:10px;margin-top:6px; }
+.memory-delete { flex-shrink:0;border:1px solid #493034;border-radius:8px;background:#211719;color:#e58c94;padding:7px 9px;font-size:11px; }
+.memory-delete:hover { background:#342023; }
+.memory-empty { color:#888;font-size:12px;padding:14px 0;line-height:1.6; }
+.memory-disabled { color:#e4bd78; }
+
 </style>
 </head>
 <body>
@@ -485,6 +501,7 @@ textarea.field { resize:vertical;line-height:1.5; }
       <button class="side-link" data-view="github">⌂ <span>GitHub и репозитории</span></button>
       <button class="side-link" data-view="files">▤ <span>Файлы проекта</span></button>
       <button class="side-link" data-view="profile">◉ <span>Профиль</span></button>
+      <button class="side-link" data-view="memory">🧠 <span>Память</span></button>
       <button class="side-link" data-view="render">◈ <span>Render Manager</span></button>
     </div>
 
@@ -657,6 +674,37 @@ textarea.field { resize:vertical;line-height:1.5; }
         <div class="card">
           <h3>История</h3>
           <button class="btn btn-danger" id="clearHistoryBtn">Очистить историю текущего чата</button>
+        </div>
+      </div></div>
+    </section>
+
+    <section class="workspace" id="view-memory">
+      <div class="section-scroll"><div class="section-inner">
+        <div class="section-heading">
+          <h2>Память Губки</h2>
+          <p>Сохранённые факты, предпочтения и важный контекст, которые помогают продолжать разговоры между чатами.</p>
+        </div>
+        <div class="card">
+          <div class="memory-toolbar">
+            <div>
+              <h3 style="margin:0 0 5px">Долговременная память</h3>
+              <div class="result" id="memoryStatus" style="margin:0">Проверяем настройки памяти...</div>
+            </div>
+            <label class="memory-toggle">
+              <input type="checkbox" id="memoryEnabled">
+              <span>Память включена</span>
+            </label>
+          </div>
+          <div class="result" id="memoryHelp">Когда память включена, Губка может использовать сохранённые сведения в новых разговорах. Напиши в чате «запомни, что…», чтобы попросить сохранить важную информацию.</div>
+        </div>
+        <div class="card">
+          <div class="memory-toolbar">
+            <h3 style="margin:0">Сохранённые записи</h3>
+            <button class="btn" id="memoryRefreshBtn" type="button">Обновить</button>
+          </div>
+          <input class="field" id="memorySearch" type="search" placeholder="Поиск по сохранённой памяти..." style="margin-top:12px">
+          <div class="result" id="memoryCount"></div>
+          <div id="memoryList" class="file-list"></div>
         </div>
       </div></div>
     </section>
@@ -956,13 +1004,14 @@ function switchView(name) {
   if (target) target.classList.add("active");
   const titles = {
     chat:activeChat()?.title || "Новый чат",
-    terminal:"Терминал",github:"GitHub",files:"Файлы проекта",profile:"Профиль",render:"Render Manager"
+    terminal:"Терминал",github:"GitHub",files:"Файлы проекта",profile:"Профиль",memory:"Память",render:"Render Manager"
   };
   $("topTitle").textContent = titles[name] || "Gubka-GPT";
   if (window.innerWidth <= 760) closeSidebar();
   if (name === "github") loadRepos();
   if (name === "files") loadFiles();
   if (name === "render") { loadRenderServices(); loadRenderOwners(); }
+  if (name === "memory") loadMemory();
 }
 document.querySelectorAll(".side-link").forEach(btn=>{
   btn.onclick = ()=>switchView(btn.dataset.view);
@@ -2137,6 +2186,122 @@ $("terminalInput").addEventListener("keydown",e=>{
   }
 });
 $("terminalClear").onclick = ()=>$("terminalOutput").innerHTML="";
+
+/* ===================== ДОЛГОВРЕМЕННАЯ ПАМЯТЬ ===================== */
+let memoryItems = [];
+let memoryEnabled = false;
+
+function formatMemoryDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+}
+
+function renderMemoryList() {
+  const list = $("memoryList");
+  const query = String($("memorySearch")?.value || "").trim().toLocaleLowerCase();
+  if (!list) return;
+  list.innerHTML = "";
+  const filtered = memoryItems.filter(item => {
+    const content = String(item.content || "");
+    const category = String(item.category || "");
+    return !query || content.toLocaleLowerCase().includes(query) ||
+      category.toLocaleLowerCase().includes(query);
+  });
+  $("memoryCount").textContent = `Записей: ${memoryItems.length}` +
+    (query ? ` · найдено: ${filtered.length}` : "");
+  if (!memoryEnabled) {
+    list.innerHTML = '<div class="memory-empty memory-disabled">Память выключена. Включи переключатель выше, чтобы Губка могла использовать сохранённые сведения.</div>';
+    return;
+  }
+  if (!filtered.length) {
+    list.innerHTML = '<div class="memory-empty">' +
+      (query ? "По этому запросу ничего не найдено." : "Пока нет сохранённых записей. Попроси Губку запомнить важную информацию.") +
+      '</div>';
+    return;
+  }
+  filtered.forEach(item => {
+    const row = document.createElement("div");
+    row.className = "memory-item";
+    const main = document.createElement("div");
+    main.className = "memory-item-main";
+    const category = document.createElement("div");
+    category.className = "memory-category";
+    category.textContent = item.category || "Общее";
+    const content = document.createElement("div");
+    content.className = "memory-content";
+    content.textContent = item.content || "";
+    const date = document.createElement("div");
+    date.className = "memory-date";
+    date.textContent = formatMemoryDate(item.updated_at);
+    main.append(category, content, date);
+    const remove = document.createElement("button");
+    remove.className = "memory-delete";
+    remove.type = "button";
+    remove.textContent = "Удалить";
+    remove.title = "Удалить эту запись из памяти";
+    remove.onclick = () => deleteMemoryItem(item.id);
+    row.append(main, remove);
+    list.append(row);
+  });
+}
+
+async function loadMemory() {
+  const status = $("memoryStatus");
+  if (!status) return;
+  status.textContent = "Загружаем память...";
+  try {
+    const data = await api("/api/memory");
+    memoryEnabled = Boolean(data.enabled);
+    memoryItems = Array.isArray(data.items) ? data.items : [];
+    $("memoryEnabled").checked = memoryEnabled;
+    $("memoryEnabled").disabled = false;
+    status.textContent = memoryEnabled
+      ? `Память включена · сохранено записей: ${Number(data.count ?? memoryItems.length)}`
+      : "Память выключена · сохранённые записи не используются";
+    renderMemoryList();
+  } catch (error) {
+    status.textContent = "Не удалось загрузить память: " + error.message;
+    $("memoryEnabled").disabled = true;
+    $("memoryList").innerHTML = '<div class="memory-empty">Проверь подключение и доступность API памяти на сервере.</div>';
+  }
+}
+
+$("memoryEnabled").addEventListener("change", async event => {
+  const enabled = Boolean(event.target.checked);
+  event.target.disabled = true;
+  try {
+    const data = await api("/api/memory", {
+      method: "POST",
+      body: JSON.stringify({enabled})
+    });
+    memoryEnabled = Boolean(data.enabled);
+    $("memoryStatus").textContent = memoryEnabled
+      ? "Память включена · Губка может использовать сохранённые записи"
+      : "Память выключена · сохранённые записи остаются в хранилище";
+    renderMemoryList();
+  } catch (error) {
+    event.target.checked = memoryEnabled;
+    showResult($("memoryStatus"), "Не удалось изменить настройку: " + error.message, "error");
+  } finally {
+    event.target.disabled = false;
+  }
+});
+
+async function deleteMemoryItem(id) {
+  if (!Number.isInteger(Number(id)) || !confirm("Удалить эту запись из памяти Губки?")) return;
+  try {
+    await api("/api/memory/" + encodeURIComponent(id), {method:"DELETE"});
+    memoryItems = memoryItems.filter(item => Number(item.id) !== Number(id));
+    renderMemoryList();
+    $("memoryStatus").textContent = "Запись удалена · осталось записей: " + memoryItems.length;
+  } catch (error) {
+    alert("Не удалось удалить запись: " + error.message);
+  }
+}
+
+$("memoryRefreshBtn").onclick = loadMemory;
+$("memorySearch").addEventListener("input", renderMemoryList);
 
 function updateStats() {
   $("requestCount").textContent = String(requestCount);
