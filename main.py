@@ -2251,7 +2251,7 @@ def _provider_cooldown_kind(exc):
     if any(x in raw for x in ("http 429", "rate limit", "rate_limit", "temporarily rate-limited")):
         return "rate_limit"
     if any(x in raw for x in ("http 403", "tier_not_allowed", "permission")):
-        return "auth"
+        return "model"
     if any(x in raw for x in ("http 400", "http 404", "model_not_found", "unsupported")):
         return "model"
     if any(x in raw for x in ("http 5", "timeout", "timed out", "connection")):
@@ -2277,78 +2277,108 @@ def _format_provider_error(provider, exc):
 
 
 async def openrouter(messages, tools=None, max_tokens=None):
-    """Round-robin across configured providers; temporarily cool down failures."""
+    """
+    Round-robin failover with provider-isolated cooldowns.
+    If every configured provider is cooling down, wait for the earliest
+    expiry and retry once instead of immediately failing the whole request.
+    """
     global provider_rotation_index
+
     configured = await _provider_candidates()
     if not configured:
         raise RuntimeError(
-            "Нет настроенных AI-провайдеров. Проверь API-ключи в Render Environment."
+            "Нет настроенных AI-провайдеров. Проверь API-ключи и модели в Render Environment."
         )
-
-    now = time.monotonic()
-    async with provider_rotation_lock:
-        # Drop expired cooldowns so recovered providers rejoin the rotation.
-        for name, until in list(provider_cooldowns.items()):
-            if until <= now:
-                provider_cooldowns.pop(name, None)
-
-        count = len(configured)
-        start_index = provider_rotation_index % count
-        provider_rotation_index = (provider_rotation_index + 1) % max(1, count)
-        rotated = configured[start_index:] + configured[:start_index]
-        ready = [pair for pair in rotated if provider_cooldowns.get(pair[0], 0) <= now]
 
     errors = []
-    for provider, model in ready:
-        try:
-            data = await _call_provider(provider, model, messages, tools, max_tokens)
-            choices = data.get("choices") or []
-            if not choices:
-                raise RuntimeError("Провайдер вернул пустой ответ без choices.")
+    attempted = set()
+    max_rounds = 2  # one normal pass + one recovery pass after cooldown expiry
 
-            choice = choices[0]
-            message = choice.get("message") or {}
-            tool_calls = message.get("tool_calls") or []
-            answer_text = message_text(message)
-            finish_reason = str(choice.get("finish_reason") or "").lower()
+    for round_number in range(max_rounds):
+        now = time.monotonic()
+        async with provider_rotation_lock:
+            # Cooldowns are independent: an error from one provider never
+            # changes another provider's availability.
+            for name, until in list(provider_cooldowns.items()):
+                if until <= now:
+                    provider_cooldowns.pop(name, None)
 
-            if finish_reason == "length":
-                raise RuntimeError(
-                    "Модель обрезала ответ из-за лимита токенов (finish_reason=length)."
-                )
-            if not answer_text and not tool_calls:
-                raise RuntimeError("Модель вернула пустой ответ без текста и вызовов инструментов.")
+            count = len(configured)
+            start_index = provider_rotation_index % max(1, count)
+            provider_rotation_index = (provider_rotation_index + 1) % max(1, count)
+            rotated = configured[start_index:] + configured[:start_index]
+            ready = [
+                pair for pair in rotated
+                if provider_cooldowns.get(pair[0], 0) <= now
+                and (round_number > 0 or pair[0] not in attempted)
+            ]
 
-            # A successful request clears any stale cooldown for this provider.
-            provider_cooldowns.pop(provider, None)
-            actual_model = data.get("model") or model
-            last_model_context.set(f"{provider}:{actual_model}")
-            return choice
-        except Exception as exc:
-            errors.append(_format_provider_error(provider, exc))
-            kind = _provider_cooldown_kind(exc)
-            cooldown = PROVIDER_COOLDOWN_SECONDS[kind]
-            provider_cooldowns[provider] = time.monotonic() + cooldown
-            continue
+            if not ready:
+                expiries = [
+                    provider_cooldowns.get(name, 0)
+                    for name, _ in configured
+                    if provider_cooldowns.get(name, 0) > now
+                ]
+                wait_seconds = max(0.0, min(expiries) - now) if expiries else 0.0
 
-    if not ready:
-        soonest = min((provider_cooldowns.get(name, now) for name, _ in configured), default=now)
-        wait_seconds = max(1, int(soonest - now))
-        cooling = [name for name, _ in configured if provider_cooldowns.get(name, 0) > now]
-        raise RuntimeError(
-            "Все AI-провайдеры временно на cooldown. "
-            f"Ближайший повтор через ~{wait_seconds} сек. Провайдеры: {', '.join(cooling)}."
-        )
+        if not ready:
+            # Do not spin and do not give up while a configured provider is
+            # expected to leave cooldown shortly. One bounded recovery wait.
+            if round_number == 0 and wait_seconds > 0:
+                await asyncio.sleep(min(wait_seconds + 0.25, 120))
+                continue
+            break
 
-    # Include providers already cooling down in the diagnostic, but don't call them.
+        for provider, model in ready:
+            attempted.add(provider)
+            try:
+                data = await _call_provider(provider, model, messages, tools, max_tokens)
+                choices = data.get("choices") or []
+                if not choices:
+                    raise RuntimeError("Провайдер вернул пустой ответ без choices.")
+
+                choice = choices[0]
+                message = choice.get("message") or {}
+                tool_calls = message.get("tool_calls") or []
+                answer_text = message_text(message)
+                finish_reason = str(choice.get("finish_reason") or "").lower()
+
+                if finish_reason == "length":
+                    raise RuntimeError(
+                        "Модель обрезала ответ из-за лимита токенов (finish_reason=length)."
+                    )
+                if not answer_text and not tool_calls:
+                    raise RuntimeError("Модель вернула пустой ответ без текста и вызовов инструментов.")
+
+                async with provider_rotation_lock:
+                    provider_cooldowns.pop(provider, None)
+
+                actual_model = data.get("model") or model
+                last_model_context.set(f"{provider}:{actual_model}")
+                return choice
+
+            except Exception as exc:
+                errors.append(_format_provider_error(provider, exc))
+                kind = _provider_cooldown_kind(exc)
+                cooldown = PROVIDER_COOLDOWN_SECONDS.get(kind, PROVIDER_COOLDOWN_SECONDS["unknown"])
+                async with provider_rotation_lock:
+                    # Only this provider is cooled down. Never mark the whole
+                    # provider pool unavailable because of one provider error.
+                    provider_cooldowns[provider] = time.monotonic() + cooldown
+
+    now = time.monotonic()
     cooling = [
-        f"{name}: cooldown ещё {max(1, int(until - time.monotonic()))} сек."
+        f"{name}: ещё {max(1, int(until - now))} сек."
         for name, until in provider_cooldowns.items()
-        if until > time.monotonic()
+        if until > now and any(name == configured_name for configured_name, _ in configured)
     ]
     details = errors + cooling
+    if not details:
+        details = ["Провайдеры не вернули пригодный ответ; проверь ключи, баланс и выбранные модели."]
     raise RuntimeError(
-        "Все доступные AI-провайдеры не ответили. " + " | ".join(details)[:2200]
+        "Не удалось получить ответ ни от одного AI-провайдера. "
+        "Провайдеры проверяются независимо; следующий запрос повторит доступные автоматически. "
+        + " | ".join(details)[:2200]
     )
 
 
