@@ -8,6 +8,8 @@ import hashlib
 import asyncio
 import contextvars
 import time
+import sqlite3
+from contextlib import contextmanager
 
 from datetime import datetime, timezone, timedelta
 from pathlib import PurePosixPath
@@ -76,7 +78,10 @@ MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "12288"))
 
 MAX_FILE_BYTES = 100_000
 MAX_HISTORY_MESSAGES = 40
-MAX_TOOL_CALLS = 20
+MAX_TOOL_CALLS = 20  # progress checkpoint interval, not a hard task stop
+MAX_TOTAL_TOOL_CALLS = 120
+MAX_MODEL_TURNS = 180
+MAX_MEMORY_ITEMS = 300
 MAX_PENDING_AGE = 3600
 MAX_MESSAGE_LENGTH = 12000
 MODEL_CATALOG_TTL = 900
@@ -193,9 +198,248 @@ github_session_context = contextvars.ContextVar("gubka_github_session", default=
 last_model_context = contextvars.ContextVar("gubka_last_model_context", default=MODEL)
 current_model_context = contextvars.ContextVar("gubka_current_model_context", default=MODEL)
 activity_context = contextvars.ContextVar("gubka_activity_context", default=None)
+current_user_context = contextvars.ContextVar("gubka_current_user_context", default="")
 current_user_request = contextvars.ContextVar("gubka_current_user_request", default="")
 selected_models = {}
 model_catalog_cache = {"updated": 0.0, "models": []}
+
+
+# =========================================================
+# PERSISTENT STORAGE: CHAT HISTORY, TASK CHECKPOINTS, MEMORY
+# =========================================================
+
+DATA_DIR = os.getenv("GUBKA_DATA_DIR", os.path.join(os.path.dirname(__file__), "data")).strip()
+DATABASE_PATH = os.getenv(
+    "GUBKA_DATABASE_PATH",
+    os.path.join(DATA_DIR, "gubka.sqlite3")
+).strip()
+database_ready = False
+
+
+def db_connect():
+    if not database_ready:
+        raise RuntimeError("Хранилище Gubka ещё не инициализировано.")
+    connection = sqlite3.connect(DATABASE_PATH, timeout=20)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+@contextmanager
+def db_session():
+    connection = db_connect()
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def init_database():
+    global database_ready, DATABASE_PATH
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(DATABASE_PATH)), exist_ok=True)
+        connection = sqlite3.connect(DATABASE_PATH, timeout=20)
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=NORMAL")
+        connection.executescript("""
+            CREATE TABLE IF NOT EXISTS chat_history (
+                user_id TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                messages TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, chat_id)
+            );
+            CREATE TABLE IF NOT EXISTS user_memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'general',
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, category, content)
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_memory_user
+                ON user_memory(user_id, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id TEXT PRIMARY KEY,
+                memory_enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS task_checkpoints (
+                task_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                state TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+        """)
+        connection.commit()
+        connection.close()
+        database_ready = True
+        print(f"Gubka persistent database ready: {DATABASE_PATH}")
+    except Exception as exc:
+        # Fail loudly: silently using an ephemeral fallback would create the
+        # false impression that long-term memory survives Render restarts.
+        raise RuntimeError(
+            "Не удалось открыть постоянное хранилище. "
+            "Настрой Render Disk с mount path /var/data либо GUBKA_DATABASE_PATH. "
+            f"Причина: {str(exc)[:400]}"
+        ) from exc
+
+
+def load_persisted_history(user_id, chat_id):
+    try:
+        with db_session() as connection:
+            row = connection.execute(
+                "SELECT messages FROM chat_history WHERE user_id=? AND chat_id=?",
+                (str(user_id), str(chat_id))
+            ).fetchone()
+        if not row:
+            return []
+        data = json.loads(row["messages"])
+        return data[-MAX_HISTORY_MESSAGES:] if isinstance(data, list) else []
+    except Exception as exc:
+        print("History load warning:", str(exc)[:250])
+        return []
+
+
+def save_persisted_history(user_id, chat_id, messages):
+    payload = json.dumps(messages[-MAX_HISTORY_MESSAGES:], ensure_ascii=False)
+    now = datetime.now(timezone.utc).isoformat()
+    with db_session() as connection:
+        connection.execute(
+            """INSERT INTO chat_history(user_id, chat_id, messages, updated_at)
+               VALUES(?,?,?,?)
+               ON CONFLICT(user_id, chat_id) DO UPDATE SET
+                 messages=excluded.messages, updated_at=excluded.updated_at""",
+            (str(user_id), str(chat_id), payload, now)
+        )
+
+
+def memory_is_enabled(user_id):
+    with db_session() as connection:
+        row = connection.execute(
+            "SELECT memory_enabled FROM user_settings WHERE user_id=?",
+            (str(user_id),)
+        ).fetchone()
+    return True if row is None else bool(row["memory_enabled"])
+
+
+def set_memory_enabled(user_id, enabled):
+    now = datetime.now(timezone.utc).isoformat()
+    with db_session() as connection:
+        connection.execute(
+            """INSERT INTO user_settings(user_id,memory_enabled,updated_at)
+               VALUES(?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 memory_enabled=excluded.memory_enabled,
+                 updated_at=excluded.updated_at""",
+            (str(user_id), 1 if enabled else 0, now)
+        )
+
+
+def memory_save(user_id, content, category="general"):
+    content = str(content or "").strip()
+    category = re.sub(r"[^a-zA-Z0-9_-]", "_", str(category or "general").strip())[:40]
+    if not content:
+        raise ValueError("Нельзя сохранить пустую запись.")
+    if len(content) > 1600:
+        raise ValueError("Одна запись памяти не должна превышать 1600 символов.")
+    if not memory_is_enabled(user_id):
+        return {"saved": False, "reason": "Память выключена в настройках пользователя."}
+    now = datetime.now(timezone.utc).isoformat()
+    with db_session() as connection:
+        existing = connection.execute(
+            "SELECT id FROM user_memory WHERE user_id=? AND category=? AND content=?",
+            (str(user_id), category, content)
+        ).fetchone()
+        if existing:
+            connection.execute(
+                "UPDATE user_memory SET updated_at=? WHERE id=?",
+                (now, existing["id"])
+            )
+            return {"saved": True, "id": existing["id"], "updated": True}
+        count = connection.execute(
+            "SELECT COUNT(*) AS total FROM user_memory WHERE user_id=?",
+            (str(user_id),)
+        ).fetchone()["total"]
+        if count >= MAX_MEMORY_ITEMS:
+            oldest = connection.execute(
+                "SELECT id FROM user_memory WHERE user_id=? ORDER BY updated_at ASC LIMIT 1",
+                (str(user_id),)
+            ).fetchone()
+            if oldest:
+                connection.execute("DELETE FROM user_memory WHERE id=?", (oldest["id"],))
+        cursor = connection.execute(
+            "INSERT INTO user_memory(user_id,category,content,created_at,updated_at) VALUES(?,?,?,?,?)",
+            (str(user_id), category, content, now, now)
+        )
+        return {"saved": True, "id": cursor.lastrowid, "updated": False}
+
+
+def memory_search(user_id, query="", limit=20):
+    query = str(query or "").strip().casefold()
+    limit = max(1, min(int(limit or 20), 50))
+    with db_session() as connection:
+        rows = connection.execute(
+            "SELECT id,category,content,updated_at FROM user_memory "
+            "WHERE user_id=? ORDER BY updated_at DESC LIMIT ?",
+            (str(user_id), MAX_MEMORY_ITEMS)
+        ).fetchall()
+    found = [
+        dict(row) for row in rows
+        if not query or query in row["content"].casefold()
+        or query in row["category"].casefold()
+    ]
+    return found[:limit]
+
+
+def memory_forget(user_id, memory_id):
+    try:
+        memory_id = int(memory_id)
+    except (TypeError, ValueError):
+        raise ValueError("Для удаления нужен точный ID записи памяти.")
+    with db_session() as connection:
+        cursor = connection.execute(
+            "DELETE FROM user_memory WHERE user_id=? AND id=?",
+            (str(user_id), memory_id)
+        )
+        return cursor.rowcount > 0
+
+
+def memory_context_for(user_id, limit=30):
+    if not memory_is_enabled(user_id):
+        return ""
+    items = memory_search(user_id, limit=limit)
+    if not items:
+        return ""
+    return "\n".join(
+        f"- [{item['category']}] {item['content']}"
+        for item in items
+    )[:12000]
+
+
+def save_task_checkpoint(task_id, user_id, chat_id, state):
+    now = datetime.now(timezone.utc).isoformat()
+    payload = json.dumps(state, ensure_ascii=False, default=str)
+    with db_session() as connection:
+        connection.execute(
+            """INSERT INTO task_checkpoints(task_id,user_id,chat_id,state,updated_at)
+               VALUES(?,?,?,?,?)
+               ON CONFLICT(task_id) DO UPDATE SET
+                 state=excluded.state, updated_at=excluded.updated_at""",
+            (str(task_id), str(user_id), str(chat_id), payload, now)
+        )
+
+
+def delete_task_checkpoint(task_id):
+    with db_session() as connection:
+        connection.execute("DELETE FROM task_checkpoints WHERE task_id=?", (str(task_id),))
+
+
 
 # =========================================================
 # AI SYSTEM
@@ -251,6 +495,13 @@ CHAT_SYSTEM = """
 21. Не выводи внутренние технические маркеры, tool-call JSON, XML/HTML-теги или служебный мусор в обычном ответе.
 22. Если операция невозможна, честно объясни причину.
 23. Общайся естественно, понятно и по-русски.
+24. Используй память: ищи в ней важный прошлый контекст, когда он нужен для точного ответа.
+25. В конце каждого пользовательского сообщения оцени, сообщил ли пользователь устойчивое предпочтение, долгосрочную инструкцию, важный факт или решение по проекту. Если да — сохрани это через memory_save в том же ходе, не дожидаясь отдельной просьбы.
+26. Если пользователь прямо просит запомнить — обязательно используй memory_save. Если просит забыть — сначала найди нужную запись и удали только точную запись по ID.
+27. Не сохраняй пароли, API-ключи, токены, платёжные данные и другие секреты.
+28. Не сохраняй каждое сообщение подряд; избегай дублей и временных фактов.
+29. Не утверждай, что что-либо запомнил, пока memory_save не подтвердил сохранение.
+30. Финальный ответ всегда должен содержать понятный итог, даже если инструмент вернул пустой или технический результат.
 """
 
 # =========================================================
@@ -446,6 +697,28 @@ AI_TOOLS = [
             "confirmation_name": {"type": "string"}
         },
         ["service_id", "confirmation_name"]
+    ),
+    tool(
+        "memory_save",
+        "Сохранить важный долгосрочный факт, предпочтение, инструкцию или сведения о проекте пользователя. Не сохраняй разовые детали, секреты, пароли и токены. Сохраняй только действительно полезное для будущих разговоров.",
+        {"content": {"type": "string"}, "category": {"type": "string"}},
+        ["content"]
+    ),
+    tool(
+        "memory_search",
+        "Найти ранее сохранённые сведения о пользователе или его проектах перед ответом, если они могут быть полезны.",
+        {"query": {"type": "string"}, "limit": {"type": "integer"}}
+    ),
+    tool(
+        "memory_list",
+        "Показать список сохранённых записей долговременной памяти пользователя.",
+        {"limit": {"type": "integer"}}
+    ),
+    tool(
+        "memory_forget",
+        "Удалить одну конкретную запись памяти по её точному ID только по прямой просьбе пользователя.",
+        {"memory_id": {"type": "integer"}},
+        ["memory_id"]
     )
 ]
 
@@ -579,7 +852,11 @@ TOOL_LABELS = {
     "render_set_env_var": "Обновляю переменную окружения Render",
     "render_delete_env_var": "Удаляю переменную окружения Render",
     "render_rollback_service": "Запускаю откат Render",
-    "render_delete_service": "Удаляю сервис Render"
+    "render_delete_service": "Удаляю сервис Render",
+    "memory_save": "Сохраняю важную информацию в память",
+    "memory_search": "Ищу информацию в памяти",
+    "memory_list": "Просматриваю сохранённую память",
+    "memory_forget": "Удаляю запись из памяти"
 }
 
 
@@ -634,6 +911,7 @@ def remember(uid, role, content):
     items = histories.setdefault(uid, [])
     items.append({"role": role, "content": content})
     histories[uid] = items[-MAX_HISTORY_MESSAGES:]
+    save_persisted_history(uid, "telegram", histories[uid])
 
 
 def remember_web(uid, chat_id, role, content):
@@ -641,6 +919,7 @@ def remember_web(uid, chat_id, role, content):
     items = web_histories.setdefault(key, [])
     items.append({"role": role, "content": content})
     web_histories[key] = items[-MAX_HISTORY_MESSAGES:]
+    save_persisted_history(uid, chat_id, web_histories[key])
 
 
 def get_session():
@@ -1394,6 +1673,29 @@ async def render_delete_service(service_id, confirmation_name, user_request):
 # =========================================================
 
 async def execute_tool(name, args):
+    # ---------------- LONG-TERM MEMORY ----------------
+    user_id = current_user_context.get()
+    if name == "memory_save":
+        if not user_id:
+            raise RuntimeError("Не удалось определить владельца памяти.")
+        result = memory_save(user_id, args.get("content", ""), args.get("category", "general"))
+        return json.dumps(result, ensure_ascii=False)
+    if name == "memory_search":
+        if not user_id:
+            raise RuntimeError("Не удалось определить владельца памяти.")
+        result = memory_search(user_id, args.get("query", ""), args.get("limit", 20))
+        return json.dumps({"items": result, "count": len(result)}, ensure_ascii=False)
+    if name == "memory_list":
+        if not user_id:
+            raise RuntimeError("Не удалось определить владельца памяти.")
+        result = memory_search(user_id, "", args.get("limit", 50))
+        return json.dumps({"items": result, "count": len(result)}, ensure_ascii=False)
+    if name == "memory_forget":
+        if not user_id:
+            raise RuntimeError("Не удалось определить владельца памяти.")
+        deleted = memory_forget(user_id, args.get("memory_id"))
+        return json.dumps({"deleted": deleted}, ensure_ascii=False)
+
     # ---------------- RENDER ----------------
 
     if name.startswith("render_"):
@@ -2041,70 +2343,92 @@ def message_text(msg):
 
 
 async def ask_ai(messages):
+    """Continue across provider failover with a bounded, non-empty task loop."""
     work = list(messages)
+    total_tool_calls = 0
+    model_turns = 0
+    side_effect_cache = {}
+    side_effect_tools = {
+        "github_write_file", "github_create_repository",
+        "render_restart_service", "render_deploy_service",
+        "render_create_service", "render_set_env_var",
+        "render_delete_env_var", "render_rollback_service",
+        "render_delete_service"
+    }
 
-    for step in range(MAX_TOOL_CALLS):
+    while model_turns < MAX_MODEL_TURNS:
+        model_turns += 1
         set_activity(
             "Работа ИИ",
-            "Анализирую запрос и выбираю следующий шаг."
+            f"Анализирую следующий шаг. Выполнено действий: {total_tool_calls}."
         )
-        choice = await openrouter(
-            work,
-            tools=AI_TOOLS
-        )
-
+        choice = await openrouter(work, tools=AI_TOOLS)
         msg = choice.get("message", {})
         calls = msg.get("tool_calls") or []
 
         if not calls:
-            answer = message_text(msg)
-
-            answer = clean_assistant_text(answer)
+            answer = clean_assistant_text(message_text(msg))
             if not answer:
-                raise RuntimeError(
-                    "Модель вернула пустой ответ. Запрос не будет считаться выполненным."
-                )
+                work.append({
+                    "role": "assistant",
+                    "content": "Предыдущий ответ оказался пустым. Сформируй понятный итог по уже полученным результатам. Если задача не завершена, продолжи её."
+                })
+                continue
             set_activity("Формирую ответ", "Подготавливаю понятный итог выполнения.")
             return answer
 
         work.append(msg)
-
         for call in calls:
+            if total_tool_calls >= MAX_TOTAL_TOOL_CALLS:
+                raise RuntimeError(
+                    f"Достигнут защитный предел в {MAX_TOTAL_TOOL_CALLS} вызовов инструментов. "
+                    "Продолжение остановлено, чтобы избежать бесконечного цикла."
+                )
+
             function = call.get("function", {})
             tool_name = function.get("name", "инструмент")
             set_activity(
                 "Выполняю действие",
                 TOOL_LABELS.get(tool_name, "Выполняю: " + str(tool_name))
             )
-
             try:
-                args = json.loads(
-                    function.get("arguments") or "{}"
-                )
-
-                result = await execute_tool(
-                    function.get("name"),
-                    args
-                )
-
+                args = json.loads(function.get("arguments") or "{}")
+                if not isinstance(args, dict):
+                    raise ValueError("Аргументы инструмента должны быть объектом JSON.")
+                cache_key = (tool_name, json.dumps(args, sort_keys=True, ensure_ascii=False))
+                if tool_name in side_effect_tools and cache_key in side_effect_cache:
+                    result = side_effect_cache[cache_key]
+                    set_activity(
+                        "Повтор действия предотвращён",
+                        "Это действие уже успешно выполнялось в рамках текущей задачи."
+                    )
+                else:
+                    result = await execute_tool(tool_name, args)
+                    if tool_name in side_effect_tools:
+                        side_effect_cache[cache_key] = result
             except Exception as exc:
-                result = json.dumps(
-                    {"error": str(exc)[:1200]},
-                    ensure_ascii=False
-                )
+                result = json.dumps({"error": str(exc)[:1200]}, ensure_ascii=False)
 
+            total_tool_calls += 1
             work.append({
                 "role": "tool",
                 "tool_call_id": call.get("id"),
-                "content": result[:16000]
+                "content": str(result)[:16000]
             })
             set_activity(
                 "Действие завершено",
                 TOOL_LABELS.get(tool_name, "Инструмент выполнен")
             )
 
+            if total_tool_calls % MAX_TOOL_CALLS == 0:
+                set_activity(
+                    "Продолжаю выполнение",
+                    f"Пройден промежуточный порог в {MAX_TOOL_CALLS} действий. "
+                    "Контекст и результаты сохранены, продолжаю без перезапуска задачи."
+                )
+
     raise RuntimeError(
-        "Превышен лимит вызовов инструментов."
+        f"Задача остановлена по защитному пределу в {MAX_MODEL_TURNS} шагов модели."
     )
 
 
@@ -2609,9 +2933,9 @@ async def api_history(request):
 
         return web.json_response({
             "chat_id": chat_id,
-            "messages": web_histories.get(
+            "messages": web_histories.setdefault(
                 (uid, chat_id),
-                []
+                load_persisted_history(uid, chat_id)
             )
         })
 
@@ -2644,6 +2968,7 @@ async def api_chat(request):
     activity_token = activity_context.set(key)
     request_token = current_user_request.set(text)
     model_token = current_model_context.set(selected_model_for_user(uid))
+    user_token = current_user_context.set(str(uid))
     last_model_context.set(selected_model_for_user(uid))
 
     reset_activity(key)
@@ -2651,9 +2976,18 @@ async def api_chat(request):
     try:
         async with lock_for(key):
             set_activity("Обработка запроса", "Запрос принят. Анализирую задачу.")
-            history = web_histories.get(key, [])
+            history = web_histories.setdefault(
+                key, load_persisted_history(uid, chat_id)
+            )
+            memory_context = memory_context_for(uid)
+            system_prompt = CHAT_SYSTEM
+            if memory_context:
+                system_prompt += (
+                    "\n\nДОЛГОСРОЧНАЯ ПАМЯТЬ О ПОЛЬЗОВАТЕЛЕ "
+                    "(используй только когда релевантно):\n" + memory_context
+                )
             conversation = [
-                {"role": "system", "content": CHAT_SYSTEM},
+                {"role": "system", "content": system_prompt},
                 *history,
                 {"role": "user", "content": text}
             ]
@@ -2697,6 +3031,11 @@ async def api_chat(request):
             + error_text[:1800]
             + "\n\nМожешь повторить запрос или выбрать другую модель."
         )
+        try:
+            remember_web(uid, chat_id, "user", text)
+            remember_web(uid, chat_id, "assistant", safe_answer)
+        except Exception as history_exc:
+            print("Failed to persist failed task context:", str(history_exc)[:250])
         return web.json_response({
             "ok": False,
             "answer": safe_answer,
@@ -2709,6 +3048,7 @@ async def api_chat(request):
 
     finally:
         current_model_context.reset(model_token)
+        current_user_context.reset(user_token)
         current_user_request.reset(request_token)
         activity_context.reset(activity_token)
 
@@ -2724,6 +3064,38 @@ async def api_activity(request):
     return web.json_response(activity_snapshot(key, after))
 
 
+async def api_memory(request):
+    user = web_user(request)
+    uid = current_user_id(user)
+    if request.method == "GET":
+        enabled = memory_is_enabled(uid)
+        items = memory_search(uid, "", 100) if enabled else []
+        return web.json_response({
+            "ok": True, "enabled": enabled, "count": len(items), "items": items
+        })
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="Некорректный JSON.")
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        raise web.HTTPBadRequest(text="Поле enabled должно быть boolean.")
+    set_memory_enabled(uid, enabled)
+    return web.json_response({"ok": True, "enabled": enabled})
+
+
+async def api_memory_delete(request):
+    user = web_user(request)
+    uid = current_user_id(user)
+    try:
+        memory_id = int(request.match_info.get("memory_id", ""))
+    except (TypeError, ValueError):
+        raise web.HTTPBadRequest(text="Некорректный ID записи памяти.")
+    if not memory_forget(uid, memory_id):
+        raise web.HTTPNotFound(text="Запись памяти не найдена.")
+    return web.json_response({"ok": True, "deleted": True})
+
+
 async def api_clear(request):
     user = web_user(request)
     uid = current_user_id(user)
@@ -2733,6 +3105,11 @@ async def api_clear(request):
     if chat_id:
         selected_chat_id = safe_chat_id(chat_id)
         web_histories.pop((uid, selected_chat_id), None)
+        with db_session() as connection:
+            connection.execute(
+                "DELETE FROM chat_history WHERE user_id=? AND chat_id=?",
+                (str(uid), selected_chat_id)
+            )
         activity_states.pop((uid, selected_chat_id), None)
 
     else:
@@ -2742,6 +3119,11 @@ async def api_clear(request):
         for key in list(activity_states):
             if key[0] == uid:
                 activity_states.pop(key, None)
+        with db_session() as connection:
+            connection.execute(
+                "DELETE FROM chat_history WHERE user_id=?",
+                (str(uid),)
+            )
 
     pending.pop(uid, None)
 
@@ -3478,6 +3860,9 @@ async def start_web_server():
     app.router.add_get("/api/models", api_models)
     app.router.add_post("/api/select-model", api_select_model)
     app.router.add_get("/api/history", api_history)
+    app.router.add_get("/api/memory", api_memory)
+    app.router.add_post("/api/memory", api_memory)
+    app.router.add_delete("/api/memory/{memory_id}", api_memory_delete)
     app.router.add_get("/api/repos", api_repos)
 
     app.router.add_post(
@@ -3747,13 +4132,16 @@ async def reset_command(message: Message):
     if not await authorized(message):
         return
 
-    histories.pop(
-        message.from_user.id,
-        None
-    )
+    histories.pop(message.from_user.id, None)
+    if database_ready:
+        with db_session() as connection:
+            connection.execute(
+                "DELETE FROM chat_history WHERE user_id=? AND chat_id=?",
+                (str(message.from_user.id), "telegram")
+            )
 
     await message.answer(
-        "История Telegram-чата очищена."
+        "История Telegram-чата очищена. Долговременная память сохранена."
     )
 
 
@@ -3762,55 +4150,41 @@ async def normal_chat(message: Message):
     if not await authorized(message):
         return
 
-    text = (
-        message.text or ""
-    ).strip()
-
+    text = (message.text or "").strip()
     if not text or text.startswith("/"):
         return
-
     if len(text) > MAX_MESSAGE_LENGTH:
-        await message.answer(
-            "Сообщение слишком длинное."
-        )
+        await message.answer("Сообщение слишком длинное.")
         return
 
-    status = await message.answer(
-        "Думаю..."
-    )
-
+    status = await message.answer("Думаю...")
+    uid = message.from_user.id
+    user_token = current_user_context.set(str(uid))
     try:
-        uid = message.from_user.id
-
         async with lock_for(("telegram", uid)):
-            history = histories.get(uid, [])
+            history = histories.setdefault(
+                uid, load_persisted_history(uid, "telegram")
+            )
+            memory_context = memory_context_for(uid)
+            system_prompt = CHAT_SYSTEM
+            if memory_context:
+                system_prompt += "\n\nДОЛГОСРОЧНАЯ ПАМЯТЬ:\n" + memory_context
 
             answer = await ask_ai([
-                {
-                    "role": "system",
-                    "content": CHAT_SYSTEM
-                },
+                {"role": "system", "content": system_prompt},
                 *history,
-                {
-                    "role": "user",
-                    "content": text
-                }
+                {"role": "user", "content": text}
             ])
-
             remember(uid, "user", text)
             remember(uid, "assistant", answer)
 
         await status.delete()
-
         for start in range(0, len(answer), 3900):
-            await message.answer(
-                answer[start:start + 3900]
-            )
-
+            await message.answer(answer[start:start + 3900])
     except Exception as exc:
-        await status.edit_text(
-            "Ошибка ИИ: " + str(exc)[:1400]
-        )
+        await status.edit_text("Ошибка ИИ: " + str(exc)[:1400])
+    finally:
+        current_user_context.reset(user_token)
 
 # =========================================================
 # STARTUP
@@ -3824,6 +4198,7 @@ async def main():
     )
 
     try:
+        init_database()
         await start_web_server()
 
         print(
