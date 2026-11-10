@@ -2239,6 +2239,11 @@ async def _provider_candidates():
         if model_id:
             configured.append((provider, model_id))
 
+    # Keep the user's selected provider as the primary one.
+    # All other configured providers are strictly sequential fallbacks.
+    if selected_provider:
+        configured.sort(key=lambda pair: 0 if pair[0] == selected_provider else 1)
+
     return configured
 
 
@@ -2278,12 +2283,12 @@ def _format_provider_error(provider, exc):
 
 async def openrouter(messages, tools=None, max_tokens=None):
     """
-    Round-robin failover with provider-isolated cooldowns.
-    If every configured provider is cooling down, wait for the earliest
-    expiry and retry once instead of immediately failing the whole request.
+    Sticky-primary sequential failover with provider-isolated cooldowns.
+    The selected provider is always tried first. Other providers are called
+    one by one only if the current provider fails or is cooling down.
+    When its cooldown expires, the primary provider automatically regains
+    priority on the next request.
     """
-    global provider_rotation_index
-
     configured = await _provider_candidates()
     if not configured:
         raise RuntimeError(
@@ -2303,12 +2308,10 @@ async def openrouter(messages, tools=None, max_tokens=None):
                 if until <= now:
                     provider_cooldowns.pop(name, None)
 
-            count = len(configured)
-            start_index = provider_rotation_index % max(1, count)
-            provider_rotation_index = (provider_rotation_index + 1) % max(1, count)
-            rotated = configured[start_index:] + configured[:start_index]
+            # Preserve priority: selected provider first, then sequential
+            # fallbacks. Do not rotate the primary between ordinary requests.
             ready = [
-                pair for pair in rotated
+                pair for pair in configured
                 if provider_cooldowns.get(pair[0], 0) <= now
                 and (round_number > 0 or pair[0] not in attempted)
             ]
