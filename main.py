@@ -76,11 +76,11 @@ WEB_APP_URL = os.getenv(
 PORT = int(os.getenv("PORT", "10000"))
 MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "12288"))
 
-MAX_FILE_BYTES = 100_000
+MAX_FILE_BYTES = 900_000
 MAX_HISTORY_MESSAGES = 40
 MAX_TOOL_CALLS = 30  # редкий checkpoint, не отдельный лимит
-MAX_TOTAL_TOOL_CALLS = 300  # высокий защитный предел на одну задачу
-MAX_MODEL_TURNS = 360  # включает продолжение после промежуточных этапов
+MAX_TOTAL_TOOL_CALLS = 500  # высокий защитный предел на одну задачу
+MAX_MODEL_TURNS = 600  # включает продолжение после промежуточных этапов
 MAX_MEMORY_ITEMS = 300
 MAX_PENDING_AGE = 3600
 MAX_MESSAGE_LENGTH = 12000
@@ -565,8 +565,8 @@ AI_TOOLS = [
 
     tool(
         "github_read_file",
-        "Прочитать файл текущего репозитория.",
-        {"path": {"type": "string"}},
+        "Прочитать файл текущего репозитория. Для больших файлов используй offset/limit и читай частями; limit максимум 10000 символов.",
+        {"path": {"type": "string"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}},
         ["path"]
     ),
 
@@ -642,7 +642,7 @@ AI_TOOLS = [
     ),
     tool(
         "render_create_service",
-        "Создать новый Render web service по прямой просьбе пользователя.",
+        "Создать НОВЫЙ Render web service. Используй ТОЛЬКО если пользователь прямо просит создать новый сервис; никогда не используй для диагностики или починки уже существующего сервиса.",
         {
             "owner_id": {"type": "string"},
             "name": {"type": "string"},
@@ -1080,32 +1080,37 @@ async def github_tree():
     return files, tree.get("truncated", False), sha
 
 
-async def github_read(path):
+async def github_read(path, offset=0, limit=None):
+    """Read a GitHub text file; large files can be fetched in bounded UTF-8 chunks."""
     path = safe_path(path)
-
     data = await github_request(
         "GET",
         repo_path("/contents/" + quote(path, safe="/")),
         params={"ref": current_branch()}
     )
-
     if data.get("type") != "file":
         raise RuntimeError("Это не обычный файл.")
-
-    raw = base64.b64decode(
-        data.get("content", "").replace("\n", "")
-    )
-
+    raw = base64.b64decode(data.get("content", "").replace("\n", ""))
     if len(raw) > MAX_FILE_BYTES:
-        raise RuntimeError("Файл превышает лимит 100 КБ.")
-
+        raise RuntimeError(
+            f"Файл {len(raw)} байт превышает поддерживаемый предел GitHub Contents API ({MAX_FILE_BYTES} байт)."
+        )
     try:
         content = raw.decode("utf-8")
-
     except UnicodeDecodeError:
         raise RuntimeError("Файл не является UTF-8 текстом.")
-
-    return content, data.get("sha")
+    offset = max(0, int(offset or 0))
+    if limit is None:
+        chunk = content[offset:]
+    else:
+        limit = max(1, min(int(limit or 1), 10000))
+        chunk = content[offset:offset + limit]
+    return chunk, data.get("sha"), {
+        "total_chars": len(content), "offset": offset,
+        "returned_chars": len(chunk),
+        "has_more": offset + len(chunk) < len(content),
+        "next_offset": offset + len(chunk) if offset + len(chunk) < len(content) else None
+    }
 
 
 async def github_list_user_repos():
@@ -1185,7 +1190,7 @@ async def github_write_file(
     old_sha = None
 
     try:
-        _, old_sha = await github_read(path)
+        _, old_sha, _ = await github_read(path)
 
     except RuntimeError as exc:
         if "HTTP 404" not in str(exc):
@@ -1208,7 +1213,7 @@ async def github_write_file(
 
     commit = result.get("commit", {})
 
-    saved, saved_sha = await github_read(path)
+    saved, saved_sha, _ = await github_read(path)
 
     if saved != content:
         raise RuntimeError(
@@ -1297,11 +1302,18 @@ async def render_request(
             payload=payload
         )
     except Exception as exc:
-        match = re.search(r"HTTP (\d{3})", str(exc))
+        raw_error = str(exc)
+        match = re.search(r"HTTP (\d{3})", raw_error)
         status = match.group(1) if match else "unknown"
-        # Do not expose Render response bodies: write endpoints can echo secrets.
+        detail = re.sub(
+            r"(?i)(authorization|token|secret|password|api[_ -]?key)(\s*[:=]\s*)[^,;\s}]+",
+            r"\1\2[REDACTED]", raw_error
+        )
+        detail = re.sub(r"Bearer\s+[A-Za-z0-9._-]+", "Bearer [REDACTED]", detail)
+        detail = re.sub(r'(?i)("value"\s*:\s*)"(?:\\.|[^"\\])*"', r'\1"[REDACTED]"', detail)
+        detail = detail[:700]
         raise RuntimeError(
-            f"Ошибка запроса к Render API (HTTP {status})."
+            f"Ошибка запроса к Render API (HTTP {status}): {detail}"
         ) from None
 
 
@@ -1766,6 +1778,16 @@ async def execute_tool(name, args):
             return json.dumps(await render_list_owners(), ensure_ascii=False)
 
         if name == "render_create_service":
+            request_text = str(current_user_request.get() or "").casefold()
+            explicit_create = bool(re.search(
+                r"(созда(й|ть|йте)\s+(нов(ый|ого)\s+)?сервис|создать\s+новый\s+сервис|create\s+(a\s+)?new\s+service|new\s+render\s+service)",
+                request_text
+            ))
+            if not explicit_create:
+                raise ValueError(
+                    "Создание нового Render-сервиса заблокировано: пользователь просил работать с существующим проектом. "
+                    "Сначала найди существующий сервис через render_list_services и диагностируй его."
+                )
             result = await render_create_web_service(
                 args.get("owner_id"), args.get("name"), args.get("repo"),
                 args.get("branch", "main"), args.get("runtime", "python"),
@@ -1870,12 +1892,12 @@ async def execute_tool(name, args):
 
     if name == "github_read_file":
         path = args.get("path", "")
-        content, sha = await github_read(path)
-
+        content, sha, paging = await github_read(
+            path, args.get("offset", 0), args.get("limit", 18000)
+        )
         return json.dumps({
-            "path": path,
-            "sha": sha,
-            "content": content
+            "ok": True, "path": path, "sha": sha,
+            "content": content, **paging
         }, ensure_ascii=False)
 
     if name == "github_write_file":
@@ -2380,12 +2402,43 @@ def _tool_activity_result(tool_name, result_text, error_text=None):
             suffix = f" ({subject})" if subject else ""
             return "Действие выполнено", f"{label}{suffix}: инструмент вернул подтверждение.", "success"
 
-    return "Действие выполнено", f"{label}: инструмент вернул ответ без явного признака ошибки.", "success"
+    read_only_tools = {
+        "github_repo_info", "github_list_repositories", "github_list_files",
+        "github_read_file", "render_list_services", "render_service_status",
+        "render_list_deploys", "render_get_logs", "render_list_owners",
+        "render_get_env_keys", "memory_search", "memory_list"
+    }
+    if tool_name in read_only_tools:
+        return "Действие выполнено", f"{label}: запрос выполнен, данные получены.", "success"
+    return (
+        "Результат не подтверждён",
+        f"{label}: инструмент вернул ответ, но в нём нет явного подтверждения изменения. Не считаю действие успешным.",
+        "warning"
+    )
 
 
 async def ask_ai(messages):
     """Execute tools with truthful activity, retry feedback and a generous safety budget."""
     work = list(messages)
+    read_only_cache = {}
+    read_only_tools = {
+        "github_repo_info", "github_list_repositories", "github_list_files",
+        "github_read_file", "render_list_services", "render_service_status",
+        "render_list_deploys", "render_get_logs", "render_list_owners",
+        "render_get_env_keys", "memory_search", "memory_list"
+    }
+    work.append({
+        "role": "system",
+        "content": (
+            "Правила выполнения: если пользователь просит починить/проверить/посмотреть существующий сервис, "
+            "НЕ вызывай render_create_service и НЕ создавай новый сервис. Сначала один раз вызови "
+            "render_list_services, найди существующий сервис по имени/репозиторию, затем используй его ID "
+            "для статуса, логов и настроек. Не повторяй render_list_owners или render_list_services без "
+            "конкретной причины или изменения контекста. Большие GitHub-файлы читай через github_read_file "
+            "частями по offset/limit; продолжай с next_offset. После изменения проверяй результат повторным чтением. "
+            "Никогда не называй действие успешным только потому, что инструмент вернул произвольный ответ."
+        )
+    })
     total_tool_calls = 0
     model_turns = 0
     repeated_failures = {}
@@ -2435,6 +2488,14 @@ async def ask_ai(messages):
                 continue
 
             signature = (tool_name, json.dumps(args, sort_keys=True, ensure_ascii=False))
+            if tool_name in read_only_tools and signature in read_only_cache:
+                # Reuse an identical successful read instead of repeatedly hitting GitHub/Render.
+                work.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id"),
+                    "content": read_only_cache[signature]
+                })
+                continue
             set_activity("Выполняю действие", TOOL_LABELS.get(tool_name, f"Выполняю {tool_name}"))
             error_text = None
             try:
@@ -2472,8 +2533,10 @@ async def ask_ai(messages):
                     })
             else:
                 repeated_failures.pop(signature, None)
-                stage, detail, _ = _tool_activity_result(tool_name, result_text)
-                set_activity(stage, detail, "success")
+                if tool_name in read_only_tools:
+                    read_only_cache[signature] = result_text
+                stage, detail, activity_status = _tool_activity_result(tool_name, result_text)
+                set_activity(stage, detail, activity_status)
 
             last_tool_signature = signature
 
@@ -3218,7 +3281,7 @@ async def api_read_file(request):
     body = await request.json()
 
     path = body.get("path", "")
-    content, sha = await github_read(path)
+    content, sha, _ = await github_read(path)
 
     return web.json_response({
         "path": path,
@@ -3311,7 +3374,7 @@ async def api_prepare(request):
     ]:
         if path in files:
             try:
-                content, _ = await github_read(path)
+                content, _, _ = await github_read(path)
 
                 context.append(
                     f"\n--- {path} ---\n{content[:16000]}"
@@ -3491,7 +3554,7 @@ async def api_prepare(request):
 
     for path, content in changes.items():
         try:
-            _, sha = await github_read(path)
+            _, sha, _ = await github_read(path)
 
         except RuntimeError as exc:
             if "HTTP 404" in str(exc):
@@ -3607,7 +3670,7 @@ async def api_apply(request):
 
     for path, entry in item["files"].items():
         try:
-            _, current_sha = await github_read(path)
+            _, current_sha, _ = await github_read(path)
 
         except RuntimeError as exc:
             if "HTTP 404" in str(exc):
@@ -4118,7 +4181,7 @@ async def read_command(message: Message):
         return
 
     try:
-        content, _ = await github_read(parts[1])
+        content, _, _ = await github_read(parts[1])
 
         for start in range(0, len(content), 3800):
             await message.answer(
@@ -4153,7 +4216,7 @@ async def inspect_command(message: Message):
             "render.yaml"
         ]:
             if path in files:
-                content, _ = await github_read(path)
+                content, _, _ = await github_read(path)
 
                 context.append(
                     f"\n--- {path} ---\n{content[:16000]}"
