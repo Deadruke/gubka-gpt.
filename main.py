@@ -78,9 +78,9 @@ MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "12288"))
 
 MAX_FILE_BYTES = 100_000
 MAX_HISTORY_MESSAGES = 40
-MAX_TOOL_CALLS = 20  # progress checkpoint interval, not a hard task stop
-MAX_TOTAL_TOOL_CALLS = 120
-MAX_MODEL_TURNS = 180
+MAX_TOOL_CALLS = 30  # редкий checkpoint, не отдельный лимит
+MAX_TOTAL_TOOL_CALLS = 300  # высокий защитный предел на одну задачу
+MAX_MODEL_TURNS = 360  # включает продолжение после промежуточных этапов
 MAX_MEMORY_ITEMS = 300
 MAX_PENDING_AGE = 3600
 MAX_MESSAGE_LENGTH = 12000
@@ -1578,7 +1578,12 @@ async def render_set_env_var(service_id, key, value):
         f"/services/{quote(str(service_id), safe='')}/env-vars/{quote(key, safe='')}",
         payload={"value": value}
     )
-    return {"ok": True, "key": key}
+    # Verify the key exists after the write, without ever reading or exposing its value.
+    verified = await render_get_env_keys(service_id)
+    present = any(item.get("key") == key for item in verified.get("env_vars", []))
+    if not present:
+        raise RuntimeError(f"Render принял запрос, но проверка не нашла переменную {key}.")
+    return {"ok": True, "key": key, "verified": True}
 
 
 async def render_delete_env_var(service_id, key):
@@ -2342,26 +2347,54 @@ def message_text(msg):
     )
 
 
+def _tool_activity_result(tool_name, result_text, error_text=None):
+    """Create a short, safe activity line from the actual tool result."""
+    label = TOOL_LABELS.get(tool_name, str(tool_name or "Инструмент"))
+    if error_text:
+        return "Ошибка действия", f"{label}: {str(error_text)[:360]}", "error"
+
+    try:
+        payload = json.loads(result_text) if isinstance(result_text, str) else result_text
+    except Exception:
+        payload = None
+
+    if isinstance(payload, dict):
+        if payload.get("error"):
+            return "Ошибка действия", f"{label}: {str(payload['error'])[:360]}", "error"
+        if payload.get("ok") is False or payload.get("success") is False:
+            reason = payload.get("message") or payload.get("detail") or "Инструмент вернул отрицательный результат."
+            return "Действие не выполнено", f"{label}: {str(reason)[:360]}", "error"
+        if tool_name == "render_deploy_service":
+            deploy = payload.get("deploy") or {}
+            deploy_id = deploy.get("id") if isinstance(deploy, dict) else None
+            suffix = f" ID деплоя: {deploy_id}." if deploy_id else ""
+            return "Render принял запрос", f"Запрос на деплой принят API Render.{suffix} Завершение деплоя ещё не подтверждено.", "success"
+        if tool_name == "render_restart_service":
+            return "Render принял запрос", "Запрос на перезапуск принят API Render; состояние сервиса нужно проверять отдельно.", "success"
+        if payload.get("verified") is True:
+            path = payload.get("path")
+            detail = f"Файл {path} сохранён и повторно прочитан из GitHub." if path else "Изменение сохранено и проверено повторным чтением."
+            return "Изменение проверено", detail, "success"
+        if payload.get("ok") is True:
+            subject = payload.get("key") or payload.get("service_name") or payload.get("name")
+            suffix = f" ({subject})" if subject else ""
+            return "Действие выполнено", f"{label}{suffix}: инструмент вернул подтверждение.", "success"
+
+    return "Действие выполнено", f"{label}: инструмент вернул ответ без явного признака ошибки.", "success"
+
+
 async def ask_ai(messages):
-    """Continue across provider failover with a bounded, non-empty task loop."""
+    """Execute tools with truthful activity, retry feedback and a generous safety budget."""
     work = list(messages)
     total_tool_calls = 0
     model_turns = 0
-    side_effect_cache = {}
-    side_effect_tools = {
-        "github_write_file", "github_create_repository",
-        "render_restart_service", "render_deploy_service",
-        "render_create_service", "render_set_env_var",
-        "render_delete_env_var", "render_rollback_service",
-        "render_delete_service"
-    }
+    repeated_failures = {}
+    last_tool_signature = None
+
+    set_activity("Задача запущена", "Выполняю необходимые действия и показываю только реальные результаты.")
 
     while model_turns < MAX_MODEL_TURNS:
         model_turns += 1
-        set_activity(
-            "Работа ИИ",
-            f"Анализирую следующий шаг. Выполнено действий: {total_tool_calls}."
-        )
         choice = await openrouter(work, tools=AI_TOOLS)
         msg = choice.get("message", {})
         calls = msg.get("tool_calls") or []
@@ -2371,64 +2404,88 @@ async def ask_ai(messages):
             if not answer:
                 work.append({
                     "role": "assistant",
-                    "content": "Предыдущий ответ оказался пустым. Сформируй понятный итог по уже полученным результатам. Если задача не завершена, продолжи её."
+                    "content": "Ответ оказался пустым. Сформируй итог по уже полученным результатам. Если задача не завершена, продолжи её конкретными действиями."
                 })
                 continue
-            set_activity("Формирую ответ", "Подготавливаю понятный итог выполнения.")
+            set_activity("Задача почти завершена", "Инструменты отработали; формирую итоговый отчёт.")
             return answer
 
         work.append(msg)
         for call in calls:
             if total_tool_calls >= MAX_TOTAL_TOOL_CALLS:
                 raise RuntimeError(
-                    f"Достигнут защитный предел в {MAX_TOTAL_TOOL_CALLS} вызовов инструментов. "
-                    "Продолжение остановлено, чтобы избежать бесконечного цикла."
+                    f"Достигнут защитный предел в {MAX_TOTAL_TOOL_CALLS} реальных вызовов инструментов. "
+                    "Состояние и результаты предыдущих действий сохранены в контексте; бесконечный цикл остановлен."
                 )
 
             function = call.get("function", {})
             tool_name = function.get("name", "инструмент")
-            set_activity(
-                "Выполняю действие",
-                TOOL_LABELS.get(tool_name, "Выполняю: " + str(tool_name))
-            )
             try:
                 args = json.loads(function.get("arguments") or "{}")
                 if not isinstance(args, dict):
                     raise ValueError("Аргументы инструмента должны быть объектом JSON.")
-                cache_key = (tool_name, json.dumps(args, sort_keys=True, ensure_ascii=False))
-                if tool_name in side_effect_tools and cache_key in side_effect_cache:
-                    result = side_effect_cache[cache_key]
-                    set_activity(
-                        "Повтор действия предотвращён",
-                        "Это действие уже успешно выполнялось в рамках текущей задачи."
-                    )
-                else:
-                    result = await execute_tool(tool_name, args)
-                    if tool_name in side_effect_tools:
-                        side_effect_cache[cache_key] = result
             except Exception as exc:
-                result = json.dumps({"error": str(exc)[:1200]}, ensure_ascii=False)
+                args = {}
+                error_text = f"Некорректные аргументы инструмента: {exc}"
+                result = json.dumps({"error": error_text}, ensure_ascii=False)
+                total_tool_calls += 1
+                work.append({"role": "tool", "tool_call_id": call.get("id"), "content": result})
+                stage, detail, _ = _tool_activity_result(tool_name, result, error_text)
+                set_activity(stage, detail, "error")
+                continue
+
+            signature = (tool_name, json.dumps(args, sort_keys=True, ensure_ascii=False))
+            set_activity("Выполняю действие", TOOL_LABELS.get(tool_name, f"Выполняю {tool_name}"))
+            error_text = None
+            try:
+                result = await execute_tool(tool_name, args)
+                result_text = str(result)
+                try:
+                    parsed = json.loads(result_text)
+                except Exception:
+                    parsed = None
+                if isinstance(parsed, dict) and parsed.get("error"):
+                    error_text = str(parsed.get("error"))
+            except Exception as exc:
+                error_text = str(exc)[:1000]
+                result_text = json.dumps({"error": error_text}, ensure_ascii=False)
 
             total_tool_calls += 1
             work.append({
                 "role": "tool",
                 "tool_call_id": call.get("id"),
-                "content": str(result)[:16000]
+                "content": result_text[:16000]
             })
-            set_activity(
-                "Действие завершено",
-                TOOL_LABELS.get(tool_name, "Инструмент выполнен")
-            )
+
+            if error_text:
+                repeated_failures[signature] = repeated_failures.get(signature, 0) + 1
+                stage, detail, _ = _tool_activity_result(tool_name, result_text, error_text)
+                set_activity(stage, detail, "error")
+                # Feed the real failure back to the model. Do not silently pretend it succeeded.
+                if repeated_failures[signature] >= 3:
+                    work.append({
+                        "role": "system",
+                        "content": (
+                            f"Инструмент {tool_name} с одинаковыми аргументами уже трижды завершился ошибкой. "
+                            "Не повторяй этот же вызов без изменения причины. Изучи ошибку и выбери другой способ или честно объясни блокер."
+                        )
+                    })
+            else:
+                repeated_failures.pop(signature, None)
+                stage, detail, _ = _tool_activity_result(tool_name, result_text)
+                set_activity(stage, detail, "success")
+
+            last_tool_signature = signature
 
             if total_tool_calls % MAX_TOOL_CALLS == 0:
                 set_activity(
                     "Продолжаю выполнение",
-                    f"Пройден промежуточный порог в {MAX_TOOL_CALLS} действий. "
-                    "Контекст и результаты сохранены, продолжаю без перезапуска задачи."
+                    f"Выполнено {total_tool_calls} реальных вызовов. Результаты сохранены, продолжаю задачу."
                 )
 
     raise RuntimeError(
-        f"Задача остановлена по защитному пределу в {MAX_MODEL_TURNS} шагов модели."
+        f"Достигнут защитный предел в {MAX_MODEL_TURNS} обращений к модели. "
+        "Промежуточные результаты сохранены; задача остановлена без заявления об успехе."
     )
 
 
