@@ -51,12 +51,16 @@ UPSTAGE_API_KEY = os.getenv("UPSTAGE_API_KEY", "").strip()
 DEEPINFRA_API_KEY = os.getenv("DEEPINFRA_API_KEY", "").strip()
 SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "").strip()
 RUNAIICLOUD_API_KEY = os.getenv("RUNAIICLOUD_API_KEY", "").strip()
+SPEKA_API_KEY = os.getenv("SPEKA_API_KEY", "").strip()
+OPENTYPHOON_API_KEY = os.getenv("OPENTYPHOON_API_KEY", "").strip()
 
 NOVITA_MODEL = os.getenv("NOVITA_MODEL", "deepseek/deepseek-v4.1-flash-1017").strip()
 UPSTAGE_MODEL = os.getenv("UPSTAGE_MODEL", "solar-pro4").strip()
 DEEPINFRA_MODEL = os.getenv("DEEPINFRA_MODEL", "deepseek-ai/DeepSeek-V4-Flash-0731").strip()
 SILICONFLOW_MODEL = os.getenv("SILICONFLOW_MODEL", "deepseek-ai/DeepSeek-V4-Pro").strip()
 RUNAIICLOUD_MODEL = os.getenv("RUNAIICLOUD_MODEL", "deepseek-v4-flash").strip()
+SPEKA_MODEL = os.getenv("SPEKA_MODEL", "deepseek-ai/deepseek-v4-flash").strip()
+OPENTYPHOON_MODEL = os.getenv("OPENTYPHOON_MODEL", "typhoon-v2.1-12b-instruct").strip()
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
 
@@ -93,6 +97,8 @@ MODEL_PROVIDERS = {
     "deepinfra": "DeepInfra",
     "siliconflow": "SiliconFlow",
     "runaii": "RunAii Cloud",
+    "speka": "Speka",
+    "opentyphoon": "OpenTyphoon",
     "cloudflare": "Cloudflare Workers AI",
     "xai": "xAI Grok · платный резерв",
 }
@@ -103,6 +109,8 @@ DIRECT_MODELS = {
     "deepinfra": [(DEEPINFRA_MODEL, "DeepSeek V4 Flash · DeepInfra")],
     "siliconflow": [(SILICONFLOW_MODEL, "DeepSeek V4 Pro · SiliconFlow")],
     "runaii": [(RUNAIICLOUD_MODEL, "DeepSeek V4 Flash · RunAii")],
+    "speka": [(SPEKA_MODEL, "DeepSeek V4 Flash · Speka")],
+    "opentyphoon": [(OPENTYPHOON_MODEL, "Typhoon V2.1 12B · OpenTyphoon")],
     "cloudflare": [(CLOUDFLARE_MODEL, "Cloudflare GLM / Workers AI")],
     "xai": [("grok-4.7", "Grok 4.7 · платный резерв")],
 }
@@ -140,6 +148,8 @@ if not any((
     DEEPINFRA_API_KEY,
     SILICONFLOW_API_KEY,
     RUNAIICLOUD_API_KEY,
+    SPEKA_API_KEY,
+    OPENTYPHOON_API_KEY,
     (CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID),
     XAI_API_KEY,
 )):
@@ -160,6 +170,10 @@ if not MODEL:
         MODEL = "siliconflow:" + SILICONFLOW_MODEL
     elif RUNAIICLOUD_API_KEY:
         MODEL = "runaii:" + RUNAIICLOUD_MODEL
+    elif SPEKA_API_KEY:
+        MODEL = "speka:" + SPEKA_MODEL
+    elif OPENTYPHOON_API_KEY:
+        MODEL = "opentyphoon:" + OPENTYPHOON_MODEL
     elif CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID:
         MODEL = "cloudflare:" + CLOUDFLARE_MODEL
     elif XAI_API_KEY:
@@ -1992,6 +2006,8 @@ async def get_available_models(force_refresh=False):
         "deepinfra": (DEEPINFRA_API_KEY, DEEPINFRA_MODEL),
         "siliconflow": (SILICONFLOW_API_KEY, SILICONFLOW_MODEL),
         "runaii": (RUNAIICLOUD_API_KEY, RUNAIICLOUD_MODEL),
+        "speka": (SPEKA_API_KEY, SPEKA_MODEL),
+        "opentyphoon": (OPENTYPHOON_API_KEY, OPENTYPHOON_MODEL),
     }
     direct_names = {
         "novita": "DeepSeek V4.1 Flash · Novita",
@@ -1999,6 +2015,8 @@ async def get_available_models(force_refresh=False):
         "deepinfra": "DeepSeek V4 Flash · DeepInfra",
         "siliconflow": "DeepSeek V4 Pro · SiliconFlow",
         "runaii": "DeepSeek V4 Flash · RunAii",
+        "speka": "DeepSeek V4 Flash · Speka",
+        "opentyphoon": "Typhoon V2.1 12B · OpenTyphoon",
     }
     for provider, (api_key, model_id) in direct_provider_keys.items():
         if not api_key or not model_id:
@@ -2077,8 +2095,7 @@ async def get_available_models(force_refresh=False):
 
     if not result:
         raise RuntimeError(
-            "Нет доступных AI-провайдеров. Добавь OPENROUTER_API_KEY "
-            "и/или настрой Cloudflare либо XAI_API_KEY."
+            "Нет доступных AI-провайдеров. Добавь хотя бы один API-ключ."
         )
 
     model_catalog_cache["models"] = result
@@ -2182,6 +2199,8 @@ async def _call_provider(provider, model, messages, tools=None, max_tokens=None)
         "deepinfra": ("https://api.deepinfra.com/v1/openai/chat/completions", DEEPINFRA_API_KEY),
         "siliconflow": ("https://api.siliconflow.com/v1/chat/completions", SILICONFLOW_API_KEY),
         "runaii": ("https://api.runaii.cloud/v1/chat/completions", RUNAIICLOUD_API_KEY),
+        "speka": ("https://speka.me/v1/chat/completions", SPEKA_API_KEY),
+        "opentyphoon": ("https://api.opentyphoon.ai/v1/chat/completions", OPENTYPHOON_API_KEY),
     }
     if provider in endpoints:
         url, api_key = endpoints[provider]
@@ -2221,7 +2240,7 @@ async def _provider_candidates():
     configured = []
     provider_order = (
         "openrouter", "novita", "upstage", "deepinfra", "siliconflow",
-        "runaii", "cloudflare", "xai",
+        "runaii", "speka", "opentyphoon", "cloudflare", "xai",
     )
     selected = current_model_context.get() or MODEL
     selected_provider, selected_model = selected.split(":", 1) if ":" in selected else ("", "")
@@ -2238,11 +2257,6 @@ async def _provider_candidates():
         model_id = str(chosen.get("id") or "").split(":", 1)[-1]
         if model_id:
             configured.append((provider, model_id))
-
-    # Keep the user's selected provider as the primary one.
-    # All other configured providers are strictly sequential fallbacks.
-    if selected_provider:
-        configured.sort(key=lambda pair: 0 if pair[0] == selected_provider else 1)
 
     return configured
 
@@ -2283,12 +2297,12 @@ def _format_provider_error(provider, exc):
 
 async def openrouter(messages, tools=None, max_tokens=None):
     """
-    Sticky-primary sequential failover with provider-isolated cooldowns.
-    The selected provider is always tried first. Other providers are called
-    one by one only if the current provider fails or is cooling down.
-    When its cooldown expires, the primary provider automatically regains
-    priority on the next request.
+    Round-robin failover with provider-isolated cooldowns.
+    If every configured provider is cooling down, wait for the earliest
+    expiry and retry once instead of immediately failing the whole request.
     """
+    global provider_rotation_index
+
     configured = await _provider_candidates()
     if not configured:
         raise RuntimeError(
@@ -2308,10 +2322,12 @@ async def openrouter(messages, tools=None, max_tokens=None):
                 if until <= now:
                     provider_cooldowns.pop(name, None)
 
-            # Preserve priority: selected provider first, then sequential
-            # fallbacks. Do not rotate the primary between ordinary requests.
+            count = len(configured)
+            start_index = provider_rotation_index % max(1, count)
+            provider_rotation_index = (provider_rotation_index + 1) % max(1, count)
+            rotated = configured[start_index:] + configured[:start_index]
             ready = [
-                pair for pair in configured
+                pair for pair in rotated
                 if provider_cooldowns.get(pair[0], 0) <= now
                 and (round_number > 0 or pair[0] not in attempted)
             ]
