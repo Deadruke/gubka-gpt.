@@ -594,7 +594,8 @@ AI_TOOLS = [
 
     tool(
         "github_list_files",
-        "Показать файлы текущего репозитория."
+        "Показать файлы текущего репозитория. Для больших списков используй offset/limit и последовательно просмотри все страницы; truncated=true означает, что GitHub ограничил дерево и полный список не подтверждён.",
+        {"offset": {"type": "integer"}, "limit": {"type": "integer"}}
     ),
 
     tool(
@@ -669,6 +670,17 @@ AI_TOOLS = [
             "clear_cache": {"type": "boolean"}
         },
         ["service_id"]
+    ),
+    tool(
+        "render_wait_deploy",
+        "Дождаться фактического завершения конкретного деплоя Render. Возвращает verified=true ТОЛЬКО если Render подтвердил статус live и (если передан expected_commit) SHA деплоя совпадает с ожидаемым коммитом. При таймауте вернёт pending=true, это НЕ успех.",
+        {
+            "service_id": {"type": "string"},
+            "deploy_id": {"type": "string"},
+            "expected_commit": {"type": "string"},
+            "timeout_seconds": {"type": "integer"}
+        },
+        ["service_id", "deploy_id"]
     ),
     tool(
         "render_list_owners",
@@ -879,7 +891,8 @@ TOOL_LABELS = {
     "render_list_deploys": "Получаю историю деплоев Render",
     "render_get_logs": "Загружаю логи Render",
     "render_restart_service": "Отправляю запрос на перезапуск Render",
-    "render_deploy_service": "Запускаю деплой Render",
+    "render_deploy_service": "Отправляю запрос на деплой Render",
+    "render_wait_deploy": "Отслеживаю реальный статус деплоя Render",
     "render_list_owners": "Получаю список Render workspace",
     "render_create_service": "Создаю сервис Render",
     "render_get_env_keys": "Получаю названия переменных окружения",
@@ -1253,6 +1266,10 @@ async def github_write_file(
         raise RuntimeError(
             "Проверка не пройдена: содержимое файла отличается."
         )
+    if not saved_sha or not commit.get("sha"):
+        raise RuntimeError(
+            "GitHub не вернул SHA файла или коммита. Запись нельзя считать полностью подтверждённой."
+        )
 
     return {
         "ok": True,
@@ -1565,12 +1582,100 @@ async def render_deploy_service(
     )
 
     deploy = result.get("deploy", result)
+    if not isinstance(deploy, dict) or not deploy.get("id"):
+        raise RuntimeError(
+            "Render не вернул ID созданного деплоя. Нельзя отслеживать его статус, поэтому запрос не считается подтверждённым."
+        )
 
     return {
         "ok": True,
         "service": service,
         "deploy": deploy,
         "message": "Render принял запрос на деплой."
+    }
+
+
+async def render_wait_deploy(
+    service_id,
+    deploy_id,
+    expected_commit="",
+    timeout_seconds=70
+):
+    """Poll Render until a deploy reaches a terminal state; never equate accepted with live."""
+    service = await render_get_service(service_id)
+    deploy_id = str(deploy_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{5,120}", deploy_id):
+        raise ValueError("Некорректный ID деплоя Render.")
+
+    expected_commit = str(expected_commit or "").strip()
+    if expected_commit and not re.fullmatch(r"[0-9a-fA-F]{7,64}", expected_commit):
+        raise ValueError("Некорректный SHA ожидаемого коммита.")
+
+    timeout_seconds = max(5, min(int(timeout_seconds or 70), 75))
+    deadline = time.monotonic() + timeout_seconds
+    last_deploy = None
+    terminal_failure = {
+        "build_failed", "update_failed", "canceled", "pre_deploy_failed",
+        "deactivated", "failed"
+    }
+
+    while time.monotonic() < deadline:
+        payload = await render_request(
+            "GET",
+            f"/services/{quote(service_id, safe='')}/deploys/{quote(deploy_id, safe='')}"
+        )
+        deploy = payload.get("deploy", payload) if isinstance(payload, dict) else {}
+        if not isinstance(deploy, dict) or not deploy.get("id"):
+            raise RuntimeError("Render не вернул подтверждённую информацию о запрошенном деплое.")
+        last_deploy = deploy
+        status = str(deploy.get("status") or "unknown").lower()
+        commit = deploy.get("commit") or {}
+        actual_commit = str(commit.get("id") or deploy.get("commitId") or "")
+
+        if status == "live":
+            if not expected_commit:
+                return {
+                    "ok": False, "verified": False, "pending": False,
+                    "reason": "expected_commit_missing", "service_id": service_id,
+                    "deploy_id": deploy_id, "status": status,
+                    "actual_commit": actual_commit or None,
+                    "message": "Render сообщил live, но проверка ожидаемого GitHub SHA не выполнена. Получи текущий SHA нужной ветки и повтори проверку."
+                }
+            if not actual_commit or actual_commit.lower() != expected_commit.lower():
+                return {
+                    "ok": False, "verified": False, "pending": False,
+                    "reason": "commit_mismatch", "service_id": service_id,
+                    "deploy_id": deploy_id, "status": status,
+                    "expected_commit": expected_commit,
+                    "actual_commit": actual_commit or None,
+                    "message": "Деплой стал live, но SHA коммита не совпадает с ожидаемым."
+                }
+            return {
+                "ok": True, "verified": True, "pending": False,
+                "service_id": service_id, "service_name": service.get("name"),
+                "deploy_id": deploy_id, "status": status,
+                "commit_id": actual_commit or None,
+                "finished_at": deploy.get("finishedAt"),
+                "message": "Render подтвердил успешный статус live для указанного деплоя."
+            }
+
+        if status in terminal_failure:
+            return {
+                "ok": False, "verified": False, "pending": False,
+                "service_id": service_id, "deploy_id": deploy_id,
+                "status": status, "commit_id": actual_commit or None,
+                "finished_at": deploy.get("finishedAt"),
+                "message": f"Деплой завершился с ошибочным статусом: {status}."
+            }
+
+        await asyncio.sleep(min(5, max(0.5, deadline - time.monotonic())))
+
+    status = str((last_deploy or {}).get("status") or "unknown")
+    return {
+        "ok": False, "verified": False, "pending": True,
+        "service_id": service_id, "deploy_id": deploy_id,
+        "status": status,
+        "message": "Время ожидания истекло. Деплой ещё не подтверждён как live; проверь его повторно."
     }
 
 
@@ -1808,6 +1913,15 @@ async def execute_tool(name, args):
             )
             return json.dumps(result, ensure_ascii=False)
 
+        if name == "render_wait_deploy":
+            result = await render_wait_deploy(
+                args.get("service_id", ""),
+                args.get("deploy_id", ""),
+                args.get("expected_commit", ""),
+                args.get("timeout_seconds", 70)
+            )
+            return json.dumps(result, ensure_ascii=False)
+
         if name == "render_list_owners":
             return json.dumps(await render_list_owners(), ensure_ascii=False)
 
@@ -1914,14 +2028,23 @@ async def execute_tool(name, args):
         )
 
     if name == "github_list_files":
-        files, truncated, _ = await github_tree()
+        files, truncated, head_sha = await github_tree()
+        offset = max(0, int(args.get("offset", 0) or 0))
+        limit = max(1, min(int(args.get("limit", 250) or 250), 500))
+        page = files[offset:offset + limit]
 
         return json.dumps({
             "repository": current_repo(),
             "branch": current_branch(),
-            "files": files[:250],
+            "head_sha": head_sha,
+            "files": page,
             "total": len(files),
-            "truncated": truncated
+            "offset": offset,
+            "returned": len(page),
+            "has_more": offset + len(page) < len(files),
+            "next_offset": offset + len(page) if offset + len(page) < len(files) else None,
+            "truncated": truncated,
+            "warning": "GitHub пометил рекурсивное дерево как truncated; список может быть неполным." if truncated else None
         }, ensure_ascii=False)
 
     if name == "github_read_file":
@@ -2519,6 +2642,12 @@ def _tool_activity_result(tool_name, result_text, error_text=None):
         payload = None
 
     if isinstance(payload, dict):
+        if tool_name == "render_wait_deploy":
+            if payload.get("verified") is True and payload.get("status") == "live":
+                return "Деплой подтверждён", f"Render подтвердил live для деплоя {payload.get('deploy_id')}; SHA: {payload.get('commit_id') or 'не предоставлен'}.", "completed"
+            if payload.get("pending") is True:
+                return "Деплой ещё выполняется", f"Статус Render: {payload.get('status')}. Успех не подтверждён.", "running"
+            return "Деплой не прошёл проверку", str(payload.get("message") or payload.get("status") or "Render не подтвердил успешный деплой."), "error"
         if payload.get("error"):
             return "Ошибка действия", f"{label}: {str(payload['error'])[:360]}", "error"
         if payload.get("ok") is False or payload.get("success") is False:
@@ -2528,7 +2657,7 @@ def _tool_activity_result(tool_name, result_text, error_text=None):
             deploy = payload.get("deploy") or {}
             deploy_id = deploy.get("id") if isinstance(deploy, dict) else None
             suffix = f" ID деплоя: {deploy_id}." if deploy_id else ""
-            return "Render принял запрос", f"Запрос на деплой принят API Render.{suffix} Завершение деплоя ещё не подтверждено.", "success"
+            return "Render принял запрос", f"Запрос на деплой принят API Render.{suffix} Завершение деплоя ещё не подтверждено.", "warning"
         if tool_name == "render_restart_service":
             return "Render принял запрос", "Запрос на перезапуск принят API Render; состояние сервиса нужно проверять отдельно.", "success"
         if payload.get("verified") is True:
@@ -2614,14 +2743,25 @@ async def ask_ai(messages):
             "render_list_services, найди существующий сервис по имени/репозиторию, затем используй его ID "
             "для статуса, логов и настроек. Не повторяй render_list_owners или render_list_services без "
             "конкретной причины или изменения контекста. Большие GitHub-файлы читай через github_read_file "
-            "частями по offset/limit; продолжай с next_offset. После изменения проверяй результат повторным чтением. "
-            "Никогда не называй действие успешным только потому, что инструмент вернул произвольный ответ."
+            "частями по offset/limit; продолжай с next_offset. Сначала изучи структуру проекта и связанные файлы, "
+            "затем прочитай целиком все файлы, которые влияют на ошибку; если файл длинный — обязательно дочитай "
+            "все страницы до has_more=false. Получай реальные логи Render и анализируй сообщения об ошибках, "
+            "временные метки и контекст до и после сбоя. Не делай вывод по одному обрезанному фрагменту. "
+            "После изменения проверяй результат повторным чтением и используй подтверждённый commit SHA. "
+            "Перед деплоем получи SHA текущего HEAD именно той GitHub-ветки, которую развертывает найденный Render-сервис "
+            "(используй github_repo_info и сопоставь репозиторий/ветку сервиса). После render_deploy_service обязательно "
+            "вызови render_wait_deploy для возвращённого deploy.id и передай expected_commit с этим SHA; если результат "
+            "pending=true, продолжай проверку позже, а не объявляй успех. Успех деплоя — только verified=true и "
+            "status=live с совпавшим SHA; если репозиторий/ветка не совпадают или SHA неизвестен, не выдавай успех. "
+            "Никогда не называй действие успешным только потому, что инструмент вернул произвольный ответ. "
+            "Не заявляй, что запускал тесты или исполнял код, если отдельный инструмент действительно этого не делал."
         )
     })
     total_tool_calls = 0
     model_turns = 0
     repeated_failures = {}
     last_tool_signature = None
+    pending_deploy_checks = {}
 
     set_activity("Задача запущена", "Проверяю, нужны ли внешние инструменты; лишние подключения не запускаю.")
 
@@ -2632,6 +2772,21 @@ async def ask_ai(messages):
         calls = msg.get("tool_calls") or []
 
         if not calls:
+            if pending_deploy_checks:
+                pending_summary = "; ".join(
+                    f"service={sid}, deploy={did}" for sid, did in pending_deploy_checks.items()
+                )
+                work.append({
+                    "role": "system",
+                    "content": (
+                        "НЕЛЬЗЯ формировать финальный ответ: есть деплой(и), результат которых ещё не проверен: "
+                        + pending_summary
+                        + ". Вызови render_wait_deploy для каждого с реальным service_id/deploy_id. "
+                        "Если ожидание вернуло pending=true, повтори проверку с меньшим timeout_seconds. "
+                        "Не заявляй успех без verified=true/status=live."
+                    )
+                })
+                continue
             answer = clean_assistant_text(message_text(msg))
             if not answer:
                 work.append({
@@ -2689,6 +2844,17 @@ async def ask_ai(messages):
                     parsed = None
                 if isinstance(parsed, dict) and parsed.get("error"):
                     error_text = str(parsed.get("error"))
+                if isinstance(parsed, dict) and tool_name == "render_deploy_service":
+                    deploy_data = parsed.get("deploy") or {}
+                    deploy_id = deploy_data.get("id") if isinstance(deploy_data, dict) else None
+                    service_data = parsed.get("service") or {}
+                    service_id = service_data.get("id") if isinstance(service_data, dict) else args.get("service_id")
+                    if deploy_id and service_id:
+                        pending_deploy_checks[str(service_id)] = str(deploy_id)
+                elif isinstance(parsed, dict) and tool_name == "render_wait_deploy":
+                    service_id = str(parsed.get("service_id") or args.get("service_id") or "")
+                    if parsed.get("verified") is True or (parsed.get("pending") is False and parsed.get("verified") is False):
+                        pending_deploy_checks.pop(service_id, None)
             except asyncio.TimeoutError:
                 error_text = f"Инструмент не ответил за {TOOL_CALL_TIMEOUT_SECONDS} секунд."
                 result_text = json.dumps({"error": error_text}, ensure_ascii=False)
@@ -2718,6 +2884,22 @@ async def ask_ai(messages):
                     })
             else:
                 repeated_failures.pop(signature, None)
+                if tool_name == "github_write_file":
+                    # A successful write invalidates every cached view that could now be stale.
+                    try:
+                        write_result = json.loads(result_text)
+                    except Exception:
+                        write_result = {}
+                    changed_path = str(write_result.get("path") or args.get("path") or "")
+                    read_only_cache = {
+                        cached_signature: cached_value
+                        for cached_signature, cached_value in read_only_cache.items()
+                        if not (
+                            cached_signature[0] == "github_read_file"
+                            and str(cached_signature[1].get("path") or "") == changed_path
+                        )
+                        and cached_signature[0] not in {"github_list_files", "github_repo_info"}
+                    }
                 if tool_name in read_only_tools:
                     read_only_cache[signature] = result_text
                 stage, detail, activity_status = _tool_activity_result(tool_name, result_text)
