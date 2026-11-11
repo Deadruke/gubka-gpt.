@@ -443,6 +443,18 @@ textarea.field { resize:vertical;line-height:1.5; }
 }
 .activity-monitor.show { display:block; }
 .activity-head { display:flex;align-items:center;gap:9px;min-width:0; }
+.activity-close {
+  width:27px;height:27px;flex-shrink:0;border:1px solid #3b4654;border-radius:8px;
+  background:rgba(255,255,255,.06);color:#cbd5e1;font-size:17px;line-height:1;
+  display:grid;place-items:center;padding:0;
+}
+.activity-close:hover { background:rgba(255,255,255,.13);color:#fff; }
+.activity-reopen {
+  display:none;align-self:flex-start;margin:8px 18px 0 auto;padding:8px 11px;
+  border:1px solid #343b45;border-radius:10px;background:#171d26;color:#cbd5e1;
+  font-size:11px;box-shadow:0 4px 14px #0005;
+}
+.activity-reopen.show { display:inline-flex;align-items:center;gap:7px; }
 .activity-pulse { width:8px;height:8px;flex-shrink:0;border-radius:50%;background:#55c98a;box-shadow:0 0 0 4px rgba(85,201,138,.12); }
 .activity-monitor.busy .activity-pulse { background:#78aaff;box-shadow:0 0 0 4px rgba(120,170,255,.13);animation:activityPulse 1.35s infinite; }
 .activity-monitor.failed .activity-pulse { background:#e17878;box-shadow:0 0 0 4px rgba(225,120,120,.12); }
@@ -540,10 +552,12 @@ textarea.field { resize:vertical;line-height:1.5; }
           <span class="activity-pulse"></span>
           <span class="activity-stage" id="activityStage">Ожидание действий</span>
           <span class="activity-state" id="activityState">Мониторинг</span>
+          <button class="activity-close" id="activityCloseBtn" type="button" aria-label="Скрыть панель логов" title="Скрыть панель">×</button>
         </div>
         <div class="activity-detail" id="activityDetail">Здесь будут отображаться текущие действия Губки.</div>
         <div class="activity-events" id="activityEvents"></div>
       </div>
+      <button class="activity-reopen" id="activityReopenBtn" type="button">☷ Показать логи</button>
       <div class="chat-scroll" id="chatScroll">
         <div class="chat-inner" id="chatBox">
           <div class="welcome" id="welcome">
@@ -1636,11 +1650,32 @@ let activityPollTimer = null;
 let activityRequestToken = 0;
 let activityLastEventId = 0;
 let activityCurrentChatId = "";
+const ACTIVITY_PANEL_HIDDEN_KEY = "gubka_activity_panel_hidden_v1";
+let activityPanelDismissed = localStorage.getItem(ACTIVITY_PANEL_HIDDEN_KEY) === "1";
 
 function setActivityMonitorVisible(visible) {
   const panel = $("activityMonitor");
-  if (panel) panel.classList.toggle("show", Boolean(visible));
+  const reopen = $("activityReopenBtn");
+  const shouldShow = Boolean(visible) && !activityPanelDismissed;
+  if (panel) panel.classList.toggle("show", shouldShow);
+  if (reopen) reopen.classList.toggle("show", activityPanelDismissed);
 }
+
+function hideActivityMonitor() {
+  activityPanelDismissed = true;
+  localStorage.setItem(ACTIVITY_PANEL_HIDDEN_KEY, "1");
+  setActivityMonitorVisible(false);
+}
+
+function showActivityMonitor() {
+  activityPanelDismissed = false;
+  localStorage.removeItem(ACTIVITY_PANEL_HIDDEN_KEY);
+  const panel = $("activityMonitor");
+  setActivityMonitorVisible(Boolean(panel && (panel.classList.contains("busy") || panel.classList.contains("completed") || panel.classList.contains("failed") || panel.textContent.trim())));
+}
+
+$("activityCloseBtn")?.addEventListener("click", hideActivityMonitor);
+$("activityReopenBtn")?.addEventListener("click", showActivityMonitor);
 
 function renderActivitySnapshot(payload) {
   const data = payload?.activity && typeof payload.activity === "object" ? payload.activity : payload;
