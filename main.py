@@ -27,6 +27,8 @@ from aiogram.types import (
     WebAppInfo
 )
 
+import uuid
+
 from oauth_auth import (
     register_oauth_routes,
     get_authenticated_user,
@@ -211,6 +213,7 @@ web_histories = {}
 locks = {}
 pending = {}
 activity_states = {}
+chat_jobs = {}
 
 started_at = datetime.now(timezone.utc)
 
@@ -820,12 +823,12 @@ def activity_snapshot(key, after=0):
     state = activity_states.get(key)
     if not state:
         return {
-            "active": False,
-            "status": "idle",
-            "stage": "Нет активной задачи",
-            "detail": "",
+            "active": True,
+            "status": "queued",
+            "stage": "Ожидание запуска задачи",
+            "detail": "Запрос принят интерфейсом; ожидаю регистрации фоновой задачи.",
             "events": [],
-            "completed": True
+            "completed": False
         }
     return {
         "active": not state.get("completed", False),
@@ -3101,6 +3104,7 @@ async def api_history(request):
 
 
 async def api_chat(request):
+    """Start chat work in background and return immediately to avoid proxy timeouts."""
     user = web_user(request)
 
     try:
@@ -3109,27 +3113,49 @@ async def api_chat(request):
         raise web.HTTPBadRequest(text="Некорректный JSON.")
 
     text = str(body.get("message", "")).strip()
-    chat_mode = str(body.get("mode", "chat")).strip().lower()
-    # Autopilot удалён: все запросы обрабатываются обычным режимом.
-    chat_mode = "chat"
-
+    chat_mode = "chat"  # Autopilot удалён: используется обычный режим.
     chat_id = safe_chat_id(body.get("chat_id"))
+
     if not text:
         raise web.HTTPBadRequest(text="Сообщение пустое.")
     if len(text) > MAX_MESSAGE_LENGTH:
         raise web.HTTPBadRequest(text="Сообщение слишком длинное.")
 
     uid = current_user_id(user)
+    job_id = uuid.uuid4().hex
+    chat_jobs[job_id] = {
+        "uid": uid,
+        "chat_id": chat_id,
+        "status": "queued",
+        "result": None,
+        "created_at": time.time()
+    }
+
+    # The worker owns its ContextVars and continues even after this HTTP response ends.
+    asyncio.create_task(run_chat_job(job_id, uid, chat_id, text, chat_mode))
+    return web.json_response({
+        "ok": True,
+        "pending": True,
+        "job_id": job_id,
+        "status": "queued",
+        "chat_id": chat_id
+    }, status=202, headers={"Cache-Control": "no-store"})
+
+
+async def run_chat_job(job_id, uid, chat_id, text, chat_mode="chat"):
     key = (uid, chat_id)
     activity_token = activity_context.set(key)
     request_token = current_user_request.set(text)
-    model_token = current_model_context.set(selected_model_for_user(uid))
+    selected_model = selected_model_for_user(uid)
+    model_token = current_model_context.set(selected_model)
     user_token = current_user_context.set(str(uid))
-    last_model_context.set(selected_model_for_user(uid))
+    last_model_context.set(selected_model)
 
-    reset_activity(key)
-    set_activity("Принял задачу", "Подготавливаю контекст и проверяю очередь.")
     try:
+        chat_jobs[job_id]["status"] = "running"
+        reset_activity(key)
+        set_activity("Принял задачу", "Подготавливаю контекст и проверяю очередь.")
+
         async with lock_for(key):
             set_activity("Обработка запроса", "Запрос принят. Анализирую задачу.")
             history = web_histories.setdefault(
@@ -3151,7 +3177,6 @@ async def api_chat(request):
             answer = await asyncio.wait_for(
                 ask_ai(conversation), timeout=AI_TASK_TIMEOUT_SECONDS
             )
-
             answer = clean_assistant_text(answer)
             if not answer:
                 raise RuntimeError("Модель завершила работу без текста ответа.")
@@ -3161,7 +3186,7 @@ async def api_chat(request):
             remember_web(uid, chat_id, "assistant", answer)
             set_activity("Задача завершена", "Готовый ответ подготовлен.", "completed")
 
-            return web.json_response({
+            result = {
                 "ok": True,
                 "answer": answer,
                 "chat_id": chat_id,
@@ -3175,7 +3200,7 @@ async def api_chat(request):
                 "mode": chat_mode,
                 "agents": [],
                 "activity": activity_snapshot(key)
-            })
+            }
 
     except asyncio.TimeoutError:
         error_text = (
@@ -3189,13 +3214,14 @@ async def api_chat(request):
             remember_web(uid, chat_id, "assistant", safe_answer)
         except Exception as history_exc:
             print("Failed to persist timed-out task context:", str(history_exc)[:250])
-        return web.json_response({
+        result = {
             "ok": False, "answer": safe_answer, "error": error_text,
             "chat_id": chat_id, "mode": chat_mode, "agents": [],
             "activity": activity_snapshot(key)
-        })
+        }
     except Exception as exc:
         error_text = str(exc).strip() or "Неизвестная ошибка."
+        print(f"Chat job {job_id} failed: {error_text[:1200]}")
         set_activity("Задача не выполнена", error_text[:450], "failed")
         safe_answer = (
             "Не удалось завершить задачу.\n\n"
@@ -3207,21 +3233,54 @@ async def api_chat(request):
             remember_web(uid, chat_id, "assistant", safe_answer)
         except Exception as history_exc:
             print("Failed to persist failed task context:", str(history_exc)[:250])
-        return web.json_response({
-            "ok": False,
-            "answer": safe_answer,
-            "error": error_text[:1800],
-            "chat_id": chat_id,
-            "mode": chat_mode,
-            "agents": [],
+        result = {
+            "ok": False, "answer": safe_answer, "error": error_text[:1800],
+            "chat_id": chat_id, "mode": chat_mode, "agents": [],
             "activity": activity_snapshot(key)
-        })
-
+        }
     finally:
         current_model_context.reset(model_token)
         current_user_context.reset(user_token)
         current_user_request.reset(request_token)
         activity_context.reset(activity_token)
+
+    job = chat_jobs.get(job_id)
+    if job is not None:
+        job["result"] = result
+        job["status"] = "completed"
+        job["updated_at"] = time.time()
+
+    # Bound in-memory job history so long-lived Render instances do not grow forever.
+    if len(chat_jobs) > 300:
+        old_jobs = sorted(
+            ((k, v.get("created_at", 0)) for k, v in chat_jobs.items()
+             if v.get("status") == "completed"),
+            key=lambda item: item[1]
+        )
+        for old_id, _ in old_jobs[:max(0, len(chat_jobs) - 250)]:
+            chat_jobs.pop(old_id, None)
+
+
+async def api_chat_job(request):
+    user = web_user(request)
+    uid = current_user_id(user)
+    job_id = str(request.match_info.get("job_id", "")).strip()
+    job = chat_jobs.get(job_id)
+
+    if not job or job.get("uid") != uid:
+        raise web.HTTPNotFound(text="Задача не найдена. Возможно, сервер перезапускался.")
+
+    if job.get("result") is not None:
+        return web.json_response(
+            {"ok": True, "pending": False, "status": "completed",
+             "result": job["result"]},
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate"}
+        )
+
+    return web.json_response(
+        {"ok": True, "pending": True, "status": job.get("status", "queued")},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"}
+    )
 
 
 async def api_activity(request):
@@ -4042,6 +4101,7 @@ async def start_web_server():
     )
 
     app.router.add_post("/api/chat", api_chat)
+    app.router.add_get("/api/chat/jobs/{job_id}", api_chat_job)
     app.router.add_get("/api/activity", api_activity)
     app.router.add_post("/api/clear", api_clear)
 
@@ -4401,3 +4461,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
