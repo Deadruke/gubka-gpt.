@@ -184,17 +184,6 @@ button:disabled { opacity:.5; cursor:not-allowed; }
 .copy-btn:hover { border-color:rgba(255,255,255,.38);background:rgba(255,255,255,.16);color:#fff;transform:translateY(-1px); }
 .copy-btn:active { transform:scale(.96); }
 .mode-toolbar { display:flex;align-items:center;gap:9px;margin:0 0 9px;padding:0 2px; }
-.autopilot-btn {
-  display:inline-flex;align-items:center;gap:7px;padding:8px 12px;
-  border:1px solid #353535;border-radius:11px;background:rgba(255,255,255,.035);
-  color:#aaa;font-size:12px;font-weight:650;transition:all .18s;
-}
-.autopilot-btn .mode-spark { font-size:15px; }
-.autopilot-btn.active {
-  color:#fff;border-color:rgba(123,164,255,.55);
-  background:linear-gradient(135deg,rgba(64,116,220,.24),rgba(255,255,255,.07));
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 0 18px rgba(52,111,220,.12);
-}
 .mode-hint { color:#696969;font-size:10px; }
 .composer-area { padding:12px 18px 16px;flex-shrink:0;background:var(--bg); }
 .composer-wrap { max-width:790px;margin:auto; }
@@ -570,9 +559,6 @@ textarea.field { resize:vertical;line-height:1.5; }
       <div class="composer-area">
         <div class="composer-wrap">
           <div class="mode-toolbar">
-            <button class="autopilot-btn" id="autopilotBtn" type="button" aria-pressed="false" title="Включить автономное выполнение с несколькими агентами">
-              <span class="mode-spark">✦</span><span>Autopilot</span>
-            </button>
             <span class="mode-hint" id="modeHint">Обычный режим</span>
           </div>
           <div class="attachment-preview" id="attachmentPreview"></div>
@@ -836,7 +822,6 @@ let requestCount = Number(localStorage.getItem(STATS_KEY+"_requests") || 0);
 let totalTime = Number(localStorage.getItem(STATS_KEY+"_time") || 0);
 let sessionStarted = Date.now();
 let currentRepoName = "";
-let autopilotEnabled = false;
 
 function saveStore() {
   localStorage.setItem(STORE_KEY, JSON.stringify(chatStore));
@@ -1636,14 +1621,6 @@ function updateModelAfterResponse(data) {
   }
 }
 
-$("autopilotBtn").onclick = ()=>{
-  autopilotEnabled = !autopilotEnabled;
-  $("autopilotBtn").classList.toggle("active",autopilotEnabled);
-  $("autopilotBtn").setAttribute("aria-pressed",String(autopilotEnabled));
-  $("modeHint").textContent = autopilotEnabled
-    ? "Manager · Coder · Reviewer"
-    : "Обычный режим";
-};
 
 // Мониторинг действий backend через GET /api/activity?chat_id=...&after=...
 let activityPollTimer = null;
@@ -1839,18 +1816,12 @@ async function sendMessage() {
   $("chatScroll").scrollTop = $("chatScroll").scrollHeight;
 
   try {
-    if (autopilotEnabled) loading.textContent = "Autopilot: Manager планирует задачу...";
     const data = await api("/api/chat",{
       method:"POST",
-      body:JSON.stringify({message,chat_id:chatId,mode:autopilotEnabled?"autopilot":"chat"})
+      body:JSON.stringify({message,chat_id:chatId,mode:"chat"})
     });
     loading.remove();
     addMessage("assistant",String(data.answer ?? "Сервер не вернул ответ."));
-    if (data.mode === "autopilot") {
-      const lastRow = $("chatBox").lastElementChild;
-      const label = lastRow?.querySelector(".message-label");
-      if (label) label.textContent = "GUBKA · AUTOPILOT · MANAGER → CODER → REVIEWER";
-    }
     updateModelAfterResponse(data);
     requestCount++;
     localStorage.setItem(STATS_KEY+"_requests",String(requestCount));
