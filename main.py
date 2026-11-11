@@ -2734,152 +2734,6 @@ async def ask_ai(messages):
     )
 
 
-async def run_autopilot(messages):
-    """
-    Three-stage agent workflow:
-    1) Manager creates an execution plan.
-    2) Coder executes the task using the existing, permission-scoped tools.
-    3) Reviewer checks the result and can request one focused correction pass.
-    """
-    if not messages:
-        raise RuntimeError("Для Autopilot не передан контекст задачи.")
-
-    task = next(
-        (str(item.get("content", "")) for item in reversed(messages)
-         if item.get("role") == "user"),
-        ""
-    ).strip()
-    if not task:
-        raise RuntimeError("Не удалось определить задачу для Autopilot.")
-
-    history_context = []
-    for item in messages[-9:]:
-        role = str(item.get("role", ""))
-        content = item.get("content", "")
-        if isinstance(content, str) and content.strip():
-            history_context.append(f"{role.upper()}: {content[:5000]}")
-    context_text = "\n\n".join(history_context)[-18000:]
-
-    agents = [
-        {"id": "manager", "name": "Manager", "status": "completed"},
-        {"id": "coder", "name": "Coder", "status": "running"},
-        {"id": "reviewer", "name": "Reviewer", "status": "pending"},
-    ]
-
-    set_activity("Планирование", "Manager составляет план выполнения задачи.")
-    plan_choice = await openrouter([
-        {
-            "role": "system",
-            "content": (
-                "Ты Manager — планировщик команды Gubka-GPT. "
-                "Разбей запрос пользователя на 3–7 конкретных проверяемых этапов. "
-                "Учитывай контекст диалога. Не выполняй действия и не выдумывай "
-                "результаты. Отметь риски и критерии готовности. Пиши по-русски."
-            )
-        },
-        {
-            "role": "user",
-            "content": "Контекст и запрос:\n" + context_text +
-                       "\n\nСоставь план выполнения текущей задачи."
-        }
-    ], max_tokens=min(MAX_OUTPUT_TOKENS, 2200))
-    plan = message_text(plan_choice.get("message", {}))
-    if not plan:
-        raise RuntimeError("Manager не смог составить план.")
-
-    worker_messages = [
-        {
-            "role": "system",
-            "content": CHAT_SYSTEM + (
-                "\n\nТЫ РАБОТАЕШЬ В AUTOPILOT КАК CODER/EXECUTOR. "
-                "Следуй плану Manager, выполняй нужные действия доступными инструментами, "
-                "проверяй фактические результаты. Не заявляй об операциях, которые не "
-                "подтверждены инструментами. Не обходи ограничения безопасности и "
-                "подтверждения, уже предусмотренные приложением. В конце дай отчёт."
-            )
-        },
-        {
-            "role": "user",
-            "content": (
-                "Контекст переписки:\n" + context_text +
-                "\n\nИсходный запрос:\n" + task +
-                "\n\nПлан Manager:\n" + plan +
-                "\n\nВыполни задачу по плану. Если задача требует действий с проектом, "
-                "используй существующие инструменты. Сохраняй текущую архитектуру."
-            )
-        }
-    ]
-
-    set_activity("Выполнение задачи", "Coder выполняет действия через GitHub и Render.")
-    work_result = await ask_ai(worker_messages)
-    agents[1]["status"] = "completed"
-    agents[2]["status"] = "running"
-
-    set_activity("Проверка результата", "Reviewer проверяет выполненную работу.")
-    review_choice = await openrouter([
-        {
-            "role": "system",
-            "content": (
-                "Ты Reviewer — независимый проверяющий результата работы другого агента. "
-                "Сопоставь запрос, план и отчёт. Ищи пропуски, логические ошибки, "
-                "неподтверждённые заявления и очевидные технические риски. "
-                "Если всё достаточно хорошо, начни ответ строго с [REVIEW_OK]. "
-                "Если нужна конкретная доработка, начни с [REVIEW_FIX] и перечисли "
-                "только необходимые исправления. Не придумывай результаты проверок."
-            )
-        },
-        {
-            "role": "user",
-            "content": (
-                "ЗАПРОС:\n" + task +
-                "\n\nПЛАН:\n" + plan +
-                "\n\nОТЧЁТ CODER:\n" + work_result[:18000] +
-                "\n\nПроведи независимую проверку."
-            )
-        }
-    ], max_tokens=min(MAX_OUTPUT_TOKENS, 1800))
-    review = message_text(review_choice.get("message", {}))
-    if not review:
-        raise RuntimeError(
-            "Reviewer вернул пустой результат. Работа Coder выполнена, "
-            "но независимая проверка не завершилась."
-        )
-
-    if review.lstrip().startswith("[REVIEW_FIX]"):
-        set_activity("Исправления", "Reviewer нашёл замечания. Выполняю один проход исправлений.")
-        correction = await ask_ai([
-            {
-                "role": "system",
-                "content": CHAT_SYSTEM + (
-                    "\n\nТы выполняешь один ограниченный проход исправлений по замечаниям "
-                    "Reviewer. Исправляй только конкретно подтверждённые проблемы. "
-                    "Не повторяй уже выполненные действия без необходимости."
-                )
-            },
-            {
-                "role": "user",
-                "content": (
-                    "Исходная задача:\n" + task +
-                    "\n\nПервичный результат:\n" + work_result[:16000] +
-                    "\n\nЗамечания Reviewer:\n" + review +
-                    "\n\nВыполни необходимые исправления и сообщи, что реально проверено."
-                )
-            }
-        ])
-        work_result = correction
-        agents[2]["status"] = "completed_with_fixes"
-    else:
-        agents[2]["status"] = "completed"
-
-    # Preserve useful transparency without exposing hidden chain-of-thought.
-    report = (
-        "⚙ AUTOPILOT · Manager → Coder → Reviewer\n\n"
-        + work_result
-        + "\n\n---\nПроверка Reviewer:\n"
-        + review[:2200]
-    )
-    return report, agents
-
 
 # =========================================================
 # TELEGRAM AUTH
@@ -3256,8 +3110,8 @@ async def api_chat(request):
 
     text = str(body.get("message", "")).strip()
     chat_mode = str(body.get("mode", "chat")).strip().lower()
-    if chat_mode not in {"chat", "autopilot"}:
-        chat_mode = "chat"
+    # Autopilot удалён: все запросы обрабатываются обычным режимом.
+    chat_mode = "chat"
 
     chat_id = safe_chat_id(body.get("chat_id"))
     if not text:
@@ -3294,13 +3148,9 @@ async def api_chat(request):
                 {"role": "user", "content": text}
             ]
 
-            agent_report = []
-            if chat_mode == "autopilot":
-                answer, agent_report = await asyncio.wait_for(
-                    run_autopilot(conversation), timeout=AI_TASK_TIMEOUT_SECONDS
-                )
-            else:
-                answer = await asyncio.wait_for(ask_ai(conversation), timeout=AI_TASK_TIMEOUT_SECONDS)
+            answer = await asyncio.wait_for(
+                ask_ai(conversation), timeout=AI_TASK_TIMEOUT_SECONDS
+            )
 
             answer = clean_assistant_text(answer)
             if not answer:
@@ -3323,7 +3173,7 @@ async def api_chat(request):
                 ),
                 "paid_fallback": bool(used_model and used_model.startswith("xai:")),
                 "mode": chat_mode,
-                "agents": agent_report,
+                "agents": [],
                 "activity": activity_snapshot(key)
             })
 
