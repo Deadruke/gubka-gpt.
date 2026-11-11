@@ -117,13 +117,22 @@ DIRECT_MODELS = {
 
 PROVIDER_COOLDOWN_SECONDS = {
     "rate_limit": 90,
+    "provider_quota": 86400,
     "auth": 900,
     "billing": 900,
     "temporary": 35,
     "model": 180,
     "unknown": 45,
 }
+# Every model has its own cooldown. A rate limit on one model must not disable
+# other models belonging to the same provider.
+MODEL_CALL_TIMEOUT_SECONDS = max(15, int(os.getenv("MODEL_CALL_TIMEOUT_SECONDS", "35")))
+FAILOVER_TOTAL_TIMEOUT_SECONDS = max(30, int(os.getenv("FAILOVER_TOTAL_TIMEOUT_SECONDS", "180")))
+AI_TASK_TIMEOUT_SECONDS = max(60, int(os.getenv("AI_TASK_TIMEOUT_SECONDS", "360")))
+TOOL_CALL_TIMEOUT_SECONDS = max(15, int(os.getenv("TOOL_CALL_TIMEOUT_SECONDS", "90")))
+MODEL_COOLDOWN_MAX_SECONDS = max(300, int(os.getenv("MODEL_COOLDOWN_MAX_SECONDS", "86400")))
 provider_cooldowns = {}
+model_health = {}
 provider_rotation_index = 0
 provider_rotation_lock = asyncio.Lock()
 
@@ -516,6 +525,14 @@ CHAT_SYSTEM = """
 28. Не сохраняй каждое сообщение подряд; избегай дублей и временных фактов.
 29. Не утверждай, что что-либо запомнил, пока memory_save не подтвердил сохранение.
 30. Финальный ответ всегда должен содержать понятный итог, даже если инструмент вернул пустой или технический результат.
+31. Не используй GitHub, Render и другие инструменты, если пользователь просит только объяснение, идеи, план, оценку или пример кода.
+32. Не проси авторизацию GitHub, пока реально не требуется действие с репозиторием.
+33. Перед выбором инструмента определи намерение пользователя. Используй минимально необходимое число инструментов.
+34. Для диагностики Render сначала найди существующий сервис, затем получи статус и логи. Не зависай на повторных одинаковых запросах.
+35. Если инструмент не отвечает в установленный таймаут, сообщи об этом и предложи безопасный следующий шаг; не жди бесконечно.
+36. При программировании сначала пойми текущую архитектуру, затем предложи минимальное совместимое изменение. Проверяй синтаксис, крайние случаи и обратную совместимость.
+37. Если задача большая, разбей её на этапы, выполни по порядку и в конце дай краткий проверяемый отчёт.
+38. Не раскрывай скрытые рассуждения. Давай понятные выводы, обоснования и результаты проверок.
 """
 
 # =========================================================
@@ -1994,8 +2011,8 @@ async def get_available_models(force_refresh=False):
                     "pricing": {"prompt": "0", "completion": "0"},
                 })
 
-            # Keep the API's ordering, but avoid an unmanageably large selector.
-            result.extend(free_models[:50])
+            # Keep the API ordering while exposing a larger rotating pool.
+            result.extend(free_models[:100])
         except Exception:
             # Cloudflare/Grok remain available if OpenRouter's catalogue is down.
             pass
@@ -2106,9 +2123,24 @@ async def get_available_models(force_refresh=False):
 async def api_models(request):
     user = web_user(request)
     try:
-        models = await get_available_models()
+        models = [dict(item) for item in await get_available_models()]
     except Exception as exc:
         raise web.HTTPBadGateway(text="Не удалось загрузить каталог моделей: " + str(exc)[:500])
+
+    now_monotonic = time.monotonic()
+    for item in models:
+        model_key = f"{item.get('provider')}:{str(item.get('id') or '').split(':', 1)[-1]}"
+        health = model_health.get(model_key, {})
+        cooldown_until = max(
+            provider_cooldowns.get(model_key, 0.0),
+            provider_cooldowns.get(str(item.get("provider")) + ":__all__", 0.0),
+        )
+        item["scheduler"] = {
+            "status": "cooldown" if cooldown_until > now_monotonic else "ready",
+            "cooldown_seconds": max(0, int(cooldown_until - now_monotonic)),
+            "successes": int(health.get("successes", 0)),
+            "failures": int(health.get("failures", 0)),
+        }
 
     uid = current_user_id(user)
     current = selected_model_for_user(uid)
@@ -2231,33 +2263,47 @@ async def _call_provider(provider, model, messages, tools=None, max_tokens=None)
 
 
 async def _provider_candidates():
-    """Return one configured model per provider in the stable rotation order."""
+    """Return all configured models interleaved across providers."""
     try:
         catalog = await get_available_models()
     except Exception:
         catalog = []
 
-    configured = []
     provider_order = (
         "openrouter", "novita", "upstage", "deepinfra", "siliconflow",
         "runaii", "speka", "opentyphoon", "cloudflare", "xai",
     )
     selected = current_model_context.get() or MODEL
-    selected_provider, selected_model = selected.split(":", 1) if ":" in selected else ("", "")
-
+    grouped = {}
     for provider in provider_order:
-        entries = [item for item in catalog if item.get("provider") == provider]
-        if not entries:
-            continue
-        chosen = next((item for item in entries if item.get("id") == selected), None)
-        if chosen is None:
-            # A provider is a single rotation slot. Do not count every model
-            # in a provider catalogue as a separate provider/key.
-            chosen = entries[0]
-        model_id = str(chosen.get("id") or "").split(":", 1)[-1]
-        if model_id:
-            configured.append((provider, model_id))
+        entries = []
+        seen_ids = set()
+        for item in catalog:
+            if item.get("provider") != provider:
+                continue
+            full_id = str(item.get("id") or "").strip()
+            if not full_id or full_id in seen_ids:
+                continue
+            model_id = full_id.split(":", 1)[-1]
+            if model_id:
+                entries.append((provider, model_id))
+                seen_ids.add(full_id)
+        grouped[provider] = entries
 
+    # Interleave providers so a long catalogue from one provider cannot
+    # prevent trying independent providers during the same failover window.
+    configured = []
+    max_entries = max((len(items) for items in grouped.values()), default=0)
+    for index in range(max_entries):
+        for provider in provider_order:
+            entries = grouped.get(provider) or []
+            if index < len(entries):
+                configured.append(entries[index])
+
+    selected_pair = tuple(selected.split(":", 1)) if ":" in selected else None
+    if selected_pair in configured:
+        configured.remove(selected_pair)
+        configured.insert(0, selected_pair)
     return configured
 
 
@@ -2267,6 +2313,8 @@ def _provider_cooldown_kind(exc):
         return "auth"
     if any(x in raw for x in ("http 402", "payment_method_required", "insufficient_balance", "billing")):
         return "billing"
+    if any(x in raw for x in ("free-models-per-day", "free models per day", "daily quota", "daily limit")):
+        return "provider_quota"
     if any(x in raw for x in ("http 429", "rate limit", "rate_limit", "temporarily rate-limited")):
         return "rate_limit"
     if any(x in raw for x in ("http 403", "tier_not_allowed", "permission")):
@@ -2297,61 +2345,80 @@ def _format_provider_error(provider, exc):
 
 async def openrouter(messages, tools=None, max_tokens=None):
     """
-    Round-robin failover with provider-isolated cooldowns.
-    If every configured provider is cooling down, wait for the earliest
-    expiry and retry once instead of immediately failing the whole request.
+    Model-level round-robin scheduler with independent cooldowns.
+    A limited model is skipped while other models remain available.
     """
     global provider_rotation_index
 
     configured = await _provider_candidates()
     if not configured:
         raise RuntimeError(
-            "Нет настроенных AI-провайдеров. Проверь API-ключи и модели в Render Environment."
+            "Нет настроенных AI-моделей. Проверь API-ключи и каталог моделей в Render Environment."
         )
 
     errors = []
     attempted = set()
-    max_rounds = 2  # one normal pass + one recovery pass after cooldown expiry
+    failover_deadline = time.monotonic() + FAILOVER_TOTAL_TIMEOUT_SECONDS
 
-    for round_number in range(max_rounds):
+    for round_number in range(2):
         now = time.monotonic()
         async with provider_rotation_lock:
-            # Cooldowns are independent: an error from one provider never
-            # changes another provider's availability.
-            for name, until in list(provider_cooldowns.items()):
+            for key, until in list(provider_cooldowns.items()):
                 if until <= now:
-                    provider_cooldowns.pop(name, None)
+                    provider_cooldowns.pop(key, None)
 
             count = len(configured)
             start_index = provider_rotation_index % max(1, count)
             provider_rotation_index = (provider_rotation_index + 1) % max(1, count)
             rotated = configured[start_index:] + configured[:start_index]
-            ready = [
-                pair for pair in rotated
-                if provider_cooldowns.get(pair[0], 0) <= now
-                and (round_number > 0 or pair[0] not in attempted)
-            ]
+            ready = []
+            for provider, model in rotated:
+                model_key = f"{provider}:{model}"
+                if (
+                    provider_cooldowns.get(model_key, 0) > now
+                    or provider_cooldowns.get(f"{provider}:__all__", 0) > now
+                ):
+                    continue
+                if round_number == 0 and model_key in attempted:
+                    continue
+                ready.append((provider, model, model_key))
 
             if not ready:
                 expiries = [
-                    provider_cooldowns.get(name, 0)
-                    for name, _ in configured
-                    if provider_cooldowns.get(name, 0) > now
+                    max(
+                        provider_cooldowns.get(f"{provider}:{model}", 0),
+                        provider_cooldowns.get(f"{provider}:__all__", 0),
+                    )
+                    for provider, model in configured
+                    if max(
+                        provider_cooldowns.get(f"{provider}:{model}", 0),
+                        provider_cooldowns.get(f"{provider}:__all__", 0),
+                    ) > now
                 ]
                 wait_seconds = max(0.0, min(expiries) - now) if expiries else 0.0
 
         if not ready:
-            # Do not spin and do not give up while a configured provider is
-            # expected to leave cooldown shortly. One bounded recovery wait.
+            # Never wait for a long quota window inside a user request.
             if round_number == 0 and wait_seconds > 0:
-                await asyncio.sleep(min(wait_seconds + 0.25, 120))
+                await asyncio.sleep(min(wait_seconds + 0.2, 8))
                 continue
             break
 
-        for provider, model in ready:
-            attempted.add(provider)
+        for provider, model, model_key in ready:
+            remaining = failover_deadline - time.monotonic()
+            if remaining <= 0:
+                errors.append(f"Общий лимит переключения {FAILOVER_TOTAL_TIMEOUT_SECONDS} сек. исчерпан.")
+                break
+            attempted.add(model_key)
+            health = model_health.setdefault(model_key, {
+                "successes": 0, "failures": 0, "last_error": "",
+                "last_success": 0.0, "cooldown_until": 0.0,
+            })
             try:
-                data = await _call_provider(provider, model, messages, tools, max_tokens)
+                data = await asyncio.wait_for(
+                    _call_provider(provider, model, messages, tools, max_tokens),
+                    timeout=min(MODEL_CALL_TIMEOUT_SECONDS, max(1, remaining)),
+                )
                 choices = data.get("choices") or []
                 if not choices:
                     raise RuntimeError("Провайдер вернул пустой ответ без choices.")
@@ -2370,34 +2437,53 @@ async def openrouter(messages, tools=None, max_tokens=None):
                     raise RuntimeError("Модель вернула пустой ответ без текста и вызовов инструментов.")
 
                 async with provider_rotation_lock:
-                    provider_cooldowns.pop(provider, None)
+                    provider_cooldowns.pop(model_key, None)
+                    health["successes"] += 1
+                    health["last_success"] = time.time()
+                    health["last_error"] = ""
+                    health["cooldown_until"] = 0.0
 
                 actual_model = data.get("model") or model
                 last_model_context.set(f"{provider}:{actual_model}")
                 return choice
 
-            except Exception as exc:
-                errors.append(_format_provider_error(provider, exc))
-                kind = _provider_cooldown_kind(exc)
-                cooldown = PROVIDER_COOLDOWN_SECONDS.get(kind, PROVIDER_COOLDOWN_SECONDS["unknown"])
-                async with provider_rotation_lock:
-                    # Only this provider is cooled down. Never mark the whole
-                    # provider pool unavailable because of one provider error.
-                    provider_cooldowns[provider] = time.monotonic() + cooldown
+            except asyncio.TimeoutError:
+                exc = RuntimeError(
+                    f"таймаут: модель не ответила за {MODEL_CALL_TIMEOUT_SECONDS} секунд"
+                )
+            except Exception as caught:
+                exc = caught
+
+            errors.append(_format_provider_error(model_key, exc))
+            kind = _provider_cooldown_kind(exc)
+            cooldown = PROVIDER_COOLDOWN_SECONDS.get(kind, PROVIDER_COOLDOWN_SECONDS["unknown"])
+            if kind == "rate_limit":
+                failures = int(health.get("failures", 0)) + 1
+                cooldown = min(
+                    MODEL_COOLDOWN_MAX_SECONDS,
+                    max(cooldown, 90 * (2 ** min(failures - 1, 9)))
+                )
+            async with provider_rotation_lock:
+                health["failures"] = int(health.get("failures", 0)) + 1
+                health["last_error"] = str(exc)[:500]
+                health["cooldown_until"] = time.time() + cooldown
+                provider_cooldowns[model_key] = time.monotonic() + cooldown
+                if kind == "provider_quota":
+                    provider_cooldowns[f"{provider}:__all__"] = time.monotonic() + cooldown
 
     now = time.monotonic()
     cooling = [
-        f"{name}: ещё {max(1, int(until - now))} сек."
+        f"{name}: повторная проверка через {max(1, int(until - now))} сек."
         for name, until in provider_cooldowns.items()
-        if until > now and any(name == configured_name for configured_name, _ in configured)
+        if until > now and any(f"{provider}:{model}" == name for provider, model in configured)
     ]
     details = errors + cooling
     if not details:
-        details = ["Провайдеры не вернули пригодный ответ; проверь ключи, баланс и выбранные модели."]
+        details = ["Модели не вернули пригодный ответ; проверь ключи, баланс и доступность моделей."]
     raise RuntimeError(
-        "Не удалось получить ответ ни от одного AI-провайдера. "
-        "Провайдеры проверяются независимо; следующий запрос повторит доступные автоматически. "
-        + " | ".join(details)[:2200]
+        "Не удалось получить ответ ни от одной доступной AI-модели. "
+        "Недоступные модели временно пропущены и будут автоматически проверены после cooldown. "
+        + " | ".join(details)[:2600]
     )
 
 
@@ -2466,8 +2552,49 @@ def _tool_activity_result(tool_name, result_text, error_text=None):
     )
 
 
+def _latest_user_text(messages):
+    for item in reversed(messages or []):
+        if item.get("role") == "user":
+            value = item.get("content", "")
+            if isinstance(value, str):
+                return value.strip()
+    return ""
+
+
+def _request_needs_tools(messages):
+    """Only expose GitHub/Render tools for an explicit project action."""
+    request_text = current_user_request.get() or _latest_user_text(messages)
+    text_value = str(request_text).casefold()
+    action_patterns = (
+        r"(зайди|открой|подключись|проверь|посмотри|получи|прочитай|найди|измени|исправь|почини|добавь|удали|создай|перезапусти|запусти|check|open|inspect|read|fix|update|edit|restart|deploy).{0,60}(render|github|git hub|репозитор|коммит|деплой|deploy|логи|сервис|сервер)",
+        r"(проверь|посмотри|получи|прочитай|измени|исправь|почини|добавь|сохрани|запиши|check|inspect|read|fix|update|edit).{0,45}(файл|проект|репозитор|логи|сервис|file|project|repository|logs|service)",
+        r"(внеси|сохрани|запиши|закоммить).{0,45}(изменени|код|файл|проект)",
+    )
+    return any(re.search(pattern, text_value) for pattern in action_patterns)
+
+
 async def ask_ai(messages):
-    """Execute tools with truthful activity, retry feedback and a generous safety budget."""
+    """Answer ordinary chat without tools; use tools only for explicit project actions."""
+    work = list(messages)
+
+    if not _request_needs_tools(work):
+        set_activity("Подбираю ответ", "Обычный вопрос: отвечаю напрямую без GitHub и Render.")
+        choice = await openrouter(work, tools=None)
+        answer = clean_assistant_text(message_text(choice.get("message", {})))
+        if answer:
+            set_activity("Ответ готов", "Ответ подготовлен без запуска внешних инструментов.", "completed")
+            return answer
+
+        retry_messages = work + [{
+            "role": "user",
+            "content": "Предыдущий ответ оказался пустым. Ответь на исходный вопрос обычным текстом, без инструментов."
+        }]
+        retry = await openrouter(retry_messages, tools=None)
+        answer = clean_assistant_text(message_text(retry.get("message", {})))
+        if answer:
+            return answer
+        raise RuntimeError("Модель дважды вернула пустой ответ.")
+
     work = list(messages)
     read_only_cache = {}
     read_only_tools = {
@@ -2493,7 +2620,7 @@ async def ask_ai(messages):
     repeated_failures = {}
     last_tool_signature = None
 
-    set_activity("Задача запущена", "Выполняю необходимые действия и показываю только реальные результаты.")
+    set_activity("Задача запущена", "Проверяю, нужны ли внешние инструменты; лишние подключения не запускаю.")
 
     while model_turns < MAX_MODEL_TURNS:
         model_turns += 1
@@ -2548,7 +2675,10 @@ async def ask_ai(messages):
             set_activity("Выполняю действие", TOOL_LABELS.get(tool_name, f"Выполняю {tool_name}"))
             error_text = None
             try:
-                result = await execute_tool(tool_name, args)
+                result = await asyncio.wait_for(
+                    execute_tool(tool_name, args),
+                    timeout=TOOL_CALL_TIMEOUT_SECONDS,
+                )
                 result_text = str(result)
                 try:
                     parsed = json.loads(result_text)
@@ -2556,8 +2686,11 @@ async def ask_ai(messages):
                     parsed = None
                 if isinstance(parsed, dict) and parsed.get("error"):
                     error_text = str(parsed.get("error"))
+            except asyncio.TimeoutError:
+                error_text = f"Инструмент не ответил за {TOOL_CALL_TIMEOUT_SECONDS} секунд."
+                result_text = json.dumps({"error": error_text}, ensure_ascii=False)
             except Exception as exc:
-                error_text = str(exc)[:1000]
+                error_text = str(exc).strip()[:1000] or exc.__class__.__name__
                 result_text = json.dumps({"error": error_text}, ensure_ascii=False)
 
             total_tool_calls += 1
@@ -3163,9 +3296,11 @@ async def api_chat(request):
 
             agent_report = []
             if chat_mode == "autopilot":
-                answer, agent_report = await run_autopilot(conversation)
+                answer, agent_report = await asyncio.wait_for(
+                    run_autopilot(conversation), timeout=AI_TASK_TIMEOUT_SECONDS
+                )
             else:
-                answer = await ask_ai(conversation)
+                answer = await asyncio.wait_for(ask_ai(conversation), timeout=AI_TASK_TIMEOUT_SECONDS)
 
             answer = clean_assistant_text(answer)
             if not answer:
@@ -3192,6 +3327,23 @@ async def api_chat(request):
                 "activity": activity_snapshot(key)
             })
 
+    except asyncio.TimeoutError:
+        error_text = (
+            f"Задача превысила лимит времени {AI_TASK_TIMEOUT_SECONDS} секунд. "
+            "Промежуточные действия могли завершиться; проверь их состояние перед повтором."
+        )
+        set_activity("Задача остановлена по таймауту", error_text, "failed")
+        safe_answer = "Задача остановлена по таймауту. " + error_text
+        try:
+            remember_web(uid, chat_id, "user", text)
+            remember_web(uid, chat_id, "assistant", safe_answer)
+        except Exception as history_exc:
+            print("Failed to persist timed-out task context:", str(history_exc)[:250])
+        return web.json_response({
+            "ok": False, "answer": safe_answer, "error": error_text,
+            "chat_id": chat_id, "mode": chat_mode, "agents": [],
+            "activity": activity_snapshot(key)
+        })
     except Exception as exc:
         error_text = str(exc).strip() or "Неизвестная ошибка."
         set_activity("Задача не выполнена", error_text[:450], "failed")
@@ -4339,19 +4491,24 @@ async def normal_chat(message: Message):
             if memory_context:
                 system_prompt += "\n\nДОЛГОСРОЧНАЯ ПАМЯТЬ:\n" + memory_context
 
-            answer = await ask_ai([
+            answer = await asyncio.wait_for(ask_ai([
                 {"role": "system", "content": system_prompt},
                 *history,
                 {"role": "user", "content": text}
-            ])
+            ]), timeout=AI_TASK_TIMEOUT_SECONDS)
             remember(uid, "user", text)
             remember(uid, "assistant", answer)
 
         await status.delete()
         for start in range(0, len(answer), 3900):
             await message.answer(answer[start:start + 3900])
+    except asyncio.TimeoutError:
+        await status.edit_text(
+            f"Задача остановлена по таймауту ({AI_TASK_TIMEOUT_SECONDS} сек.). "
+            "Проверь состояние проекта перед повторным запуском."
+        )
     except Exception as exc:
-        await status.edit_text("Ошибка ИИ: " + str(exc)[:1400])
+        await status.edit_text("Ошибка ИИ: " + (str(exc).strip() or exc.__class__.__name__)[:1400])
     finally:
         current_user_context.reset(user_token)
 
