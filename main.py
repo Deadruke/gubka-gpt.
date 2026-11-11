@@ -616,6 +616,16 @@ AI_TOOLS = [
         ["path", "content"]
     ),
 
+    tool(
+        "github_delete_file",
+        "Удалить один конкретный файл из текущего GitHub-репозитория. Используй только когда пользователь прямо попросил удалить этот файл; укажи точный путь.",
+        {
+            "path": {"type": "string"},
+            "message": {"type": "string"}
+        },
+        ["path"]
+    ),
+
     # ---------------- RENDER ----------------
 
     tool(
@@ -886,6 +896,7 @@ TOOL_LABELS = {
     "github_list_files": "Изучаю структуру проекта",
     "github_read_file": "Читаю файл проекта",
     "github_write_file": "Сохраняю изменения в GitHub",
+    "github_delete_file": "Удаляю файл из GitHub",
     "render_list_services": "Получаю список сервисов Render",
     "render_service_status": "Проверяю состояние сервиса Render",
     "render_list_deploys": "Получаю историю деплоев Render",
@@ -1280,6 +1291,56 @@ async def github_write_file(
         "commit": commit.get("sha"),
         "commit_url": commit.get("html_url"),
         "verified": True
+    }
+
+
+async def github_delete_file(
+    path,
+    message="Gubka GPT: удаление файла"
+):
+    """Delete exactly one repository file and verify that GitHub no longer serves it."""
+    path = safe_path(path)
+    try:
+        _, file_sha, _ = await github_read(path)
+    except RuntimeError as exc:
+        if "HTTP 404" in str(exc):
+            raise RuntimeError(f"Файл {path} уже отсутствует в репозитории.")
+        raise
+
+    if not file_sha:
+        raise RuntimeError("GitHub не вернул SHA файла; безопасное удаление остановлено.")
+
+    result = await github_request(
+        "DELETE",
+        repo_path("/contents/" + quote(path, safe="/")),
+        payload={
+            "message": str(message)[:180] or "Gubka GPT: удаление файла",
+            "sha": file_sha,
+            "branch": current_branch()
+        }
+    )
+
+    commit = result.get("commit", {}) if isinstance(result, dict) else {}
+    if not isinstance(commit, dict) or not commit.get("sha"):
+        raise RuntimeError("GitHub не подтвердил коммит удаления.")
+
+    try:
+        await github_read(path)
+    except RuntimeError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+    else:
+        raise RuntimeError("Удаление не подтверждено: файл всё ещё доступен в GitHub.")
+
+    return {
+        "ok": True,
+        "verified": True,
+        "deleted": True,
+        "path": path,
+        "repository": current_repo(),
+        "branch": current_branch(),
+        "commit": commit.get("sha"),
+        "commit_url": commit.get("html_url")
     }
 
 
@@ -2072,6 +2133,19 @@ async def execute_tool(name, args):
             ensure_ascii=False
         )
 
+    if name == "github_delete_file":
+        request_text = str(current_user_request.get() or "").casefold()
+        requested_path = str(args.get("path", "")).strip()
+        if not requested_path or requested_path.casefold() not in request_text:
+            raise ValueError(
+                "Удаление заблокировано: путь файла должен быть явно указан пользователем в запросе."
+            )
+        result = await github_delete_file(
+            requested_path,
+            args.get("message", "Gubka GPT: удаление файла")
+        )
+        return json.dumps(result, ensure_ascii=False)
+
     raise ValueError("Неизвестный инструмент.")
 
 # =========================================================
@@ -2662,6 +2736,8 @@ def _tool_activity_result(tool_name, result_text, error_text=None):
             return "Render принял запрос", "Запрос на перезапуск принят API Render; состояние сервиса нужно проверять отдельно.", "success"
         if payload.get("verified") is True:
             path = payload.get("path")
+            if tool_name == "github_delete_file" and payload.get("deleted") is True:
+                return "Удаление подтверждено", f"Файл {path} отсутствует в GitHub; коммит {payload.get('commit')} подтверждён.", "success"
             detail = f"Файл {path} сохранён и повторно прочитан из GitHub." if path else "Изменение сохранено и проверено повторным чтением."
             return "Изменение проверено", detail, "success"
         if payload.get("ok") is True:
@@ -2748,6 +2824,7 @@ async def ask_ai(messages):
             "все страницы до has_more=false. Получай реальные логи Render и анализируй сообщения об ошибках, "
             "временные метки и контекст до и после сбоя. Не делай вывод по одному обрезанному фрагменту. "
             "После изменения проверяй результат повторным чтением и используй подтверждённый commit SHA. "
+            "Для удаления отдельного файла используй github_delete_file только если пользователь прямо попросил удалить именно этот файл; передавай точный путь и дождись verified=true/deleted=true. "
             "Перед деплоем получи SHA текущего HEAD именно той GitHub-ветки, которую развертывает найденный Render-сервис "
             "(используй github_repo_info и сопоставь репозиторий/ветку сервиса). После render_deploy_service обязательно "
             "вызови render_wait_deploy для возвращённого deploy.id и передай expected_commit с этим SHA; если результат "
@@ -2769,7 +2846,11 @@ async def ask_ai(messages):
         model_turns += 1
         choice = await openrouter(work, tools=AI_TOOLS)
         msg = choice.get("message", {})
+        if not isinstance(msg, dict):
+            raise RuntimeError("Провайдер вернул сообщение модели в неожиданном формате.")
         calls = msg.get("tool_calls") or []
+        if not isinstance(calls, list):
+            raise RuntimeError("Провайдер вернул список инструментов в неожиданном формате.")
 
         if not calls:
             if pending_deploy_checks:
@@ -2799,6 +2880,11 @@ async def ask_ai(messages):
 
         work.append(msg)
         for call in calls:
+            if not isinstance(call, dict):
+                malformed = "Провайдер вернул вызов инструмента не в виде объекта; действие не выполнялось."
+                work.append({"role": "tool", "tool_call_id": "invalid-call", "content": json.dumps({"error": malformed}, ensure_ascii=False)})
+                set_activity("Некорректный вызов инструмента", malformed, "error")
+                continue
             if total_tool_calls >= MAX_TOTAL_TOOL_CALLS:
                 raise RuntimeError(
                     f"Достигнут защитный предел в {MAX_TOTAL_TOOL_CALLS} реальных вызовов инструментов. "
@@ -2806,9 +2892,12 @@ async def ask_ai(messages):
                 )
 
             function = call.get("function", {})
-            tool_name = function.get("name", "инструмент")
+            if not isinstance(function, dict):
+                function = {}
+            tool_name = str(function.get("name") or "инструмент")
             try:
-                args = json.loads(function.get("arguments") or "{}")
+                raw_arguments = function.get("arguments") or "{}"
+                args = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
                 if not isinstance(args, dict):
                     raise ValueError("Аргументы инструмента должны быть объектом JSON.")
             except Exception as exc:
@@ -2884,8 +2973,8 @@ async def ask_ai(messages):
                     })
             else:
                 repeated_failures.pop(signature, None)
-                if tool_name == "github_write_file":
-                    # A successful write invalidates every cached view that could now be stale.
+                if tool_name in {"github_write_file", "github_delete_file"}:
+                    # A successful repository mutation invalidates every cached view that could now be stale.
                     try:
                         write_result = json.loads(result_text)
                     except Exception:
